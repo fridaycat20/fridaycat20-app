@@ -4,25 +4,27 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
-    "build": "remix vite:build",
-    "dev": "remix vite:dev",
-    "start": "remix-serve ./build/server/index.js",
-    "typecheck": "tsc",
+    "build": "react-router build",
+    "dev": "react-router dev",
+    "start": "react-router-serve ./build/server/index.js",
+    "typecheck": "react-router typegen && tsc",
     "lint": "biome lint --write",
     "format": "biome format --write",
     "check": "biome check --write"
   },
   "dependencies": {
-    "@remix-run/node": "^2.16.7",
-    "@remix-run/react": "^2.16.7",
-    "@remix-run/serve": "^2.16.7",
+    "@react-router/fs-routes": "^7.6.0",
+    "@react-router/node": "^7.6.0",
+    "@react-router/serve": "^7.6.0",
     "isbot": "^4.1.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "react-router": "^7.6.0"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
-    "@remix-run/dev": "^2.16.7",
+    "@react-router/dev": "^7.6.0",
+    "@types/node": "^22.15.21",
     "@types/react": "^18.2.20",
     "@types/react-dom": "^18.2.7",
     "autoprefixer": "^10.4.19",
