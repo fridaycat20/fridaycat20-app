@@ -1,3 +1,5 @@
+import { useRef } from "react";
+import { useFetcher } from "react-router";
 import type { MetaFunction } from "react-router";
 
 export const meta: MetaFunction = () => {
@@ -11,7 +13,24 @@ export const meta: MetaFunction = () => {
   ];
 };
 
+export const action = async ({ request }: { request: Request }) => {
+  const formData = await request.formData();
+  const minutes = formData.get("minutes");
+  // ここで minutes を使って4コマ漫画を生成する処理を追加
+  return {
+    imageUrl: "https://growthseed.jp/wp-content/uploads/2016/12/peach-1.jpg",
+  };
+};
+
+export const loader = async () => {
+  return {};
+};
+
 export default function Index() {
+  const fetcher = useFetcher();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageUrl = fetcher.data?.imageUrl ?? "";
+
   return (
     <div className="max-w-5xl mx-auto p-8">
       <header className="flex items-center gap-2 py-4 justify-center">
@@ -51,25 +70,36 @@ export default function Index() {
         <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
       </header>
       <main className="mt-8">
-        <label htmlFor="minutes" className="block font-bold mb-2">
-          議事録を入力
-        </label>
-        <textarea
-          id="minutes"
-          name="minutes"
-          rows={8}
-          className="w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          placeholder="ここに議事録を入力してください"
-        />
-        <button
-          type="button"
-          className="block w-full py-3 text-lg font-bold bg-gray-800 text-white border-none rounded-lg cursor-pointer mb-6 hover:bg-gray-700 transition"
-        >
-          4コマ漫画を生成する
-        </button>
+        <fetcher.Form method="post" className="space-y-0">
+          <label htmlFor="minutes" className="block font-bold mb-2">
+            議事録を入力
+          </label>
+          <textarea
+            id="minutes"
+            name="minutes"
+            rows={8}
+            ref={textareaRef}
+            className="w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            placeholder="ここに議事録を入力してください"
+          />
+          <button
+            type="submit"
+            className="block w-full py-3 text-lg font-bold bg-gray-800 text-white border-none rounded-lg cursor-pointer mb-6 hover:bg-gray-700 transition"
+          >
+            4コマ漫画を生成する
+          </button>
+        </fetcher.Form>
         <div className="min-h-[320px] border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-gray-50">
           {/* 生成された4コマ漫画画像をここに表示 */}
-          <span className="text-gray-400">ここに4コマ漫画が表示されます</span>
+          {imageUrl ? (
+            <img
+              src={imageUrl}
+              alt="4コマ漫画"
+              className="max-h-80 object-contain"
+            />
+          ) : (
+            <span className="text-gray-400">ここに4コマ漫画が表示されます</span>
+          )}
         </div>
       </main>
     </div>
