@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import { GoogleGenAI, Modality } from "@google/genai";
 import { useRef } from "react";
 import { useFetcher } from "react-router";
 import type { MetaFunction } from "react-router";
@@ -14,8 +16,34 @@ export const meta: MetaFunction = () => {
 };
 
 export const action = async ({ request }: { request: Request }) => {
+  const ai = new GoogleGenAI({
+    vertexai: true,
+    location: "us-central1",
+    project: "fridaycat20",
+  });
+
   const formData = await request.formData();
   const minutes = formData.get("minutes");
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.0-flash-001",
+    contents: minutes?.toString() ?? "",
+    config: {
+      systemInstruction:
+        "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。",
+    },
+  });
+
+  console.log(response.text);
+  const response2 = await ai.models.generateImages({
+    model: "imagen-4.0-generate-preview-05-20",
+    prompt: response.text?.toString() ?? "",
+    config: {
+      numberOfImages: 1,
+    },
+  });
+  console.log(response2?.generatedImages?.[0]?.image?.imageBytes);
+
   // ここで minutes を使って4コマ漫画を生成する処理を追加
   return {
     imageUrl: "https://growthseed.jp/wp-content/uploads/2016/12/peach-1.jpg",
