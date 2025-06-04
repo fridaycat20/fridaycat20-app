@@ -1,8 +1,7 @@
-import * as fs from "node:fs";
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { useRef } from "react";
-import { useFetcher } from "react-router";
 import type { MetaFunction } from "react-router";
+import { useFetcher } from "react-router";
 
 export const meta: MetaFunction = () => {
   return [
@@ -30,14 +29,14 @@ export const action = async ({ request }: { request: Request }) => {
     contents: minutes?.toString() ?? "",
     config: {
       systemInstruction:
-        "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。",
+        "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。出力は英語にしてください。",
     },
   });
 
   console.log(response.text);
   const response2 = await ai.models.generateImages({
     model: "imagen-4.0-generate-preview-05-20",
-    prompt: response.text?.toString() ?? "",
+    prompt: 'Please turn the following text into a 4-panel comic.：' + response.text?.toString(),
     config: {
       numberOfImages: 1,
     },
@@ -46,7 +45,7 @@ export const action = async ({ request }: { request: Request }) => {
 
   // ここで minutes を使って4コマ漫画を生成する処理を追加
   return {
-    imageUrl: "https://growthseed.jp/wp-content/uploads/2016/12/peach-1.jpg",
+    imageBytes: response2?.generatedImages?.[0]?.image?.imageBytes,
   };
 };
 
@@ -57,7 +56,14 @@ export const loader = async () => {
 export default function Index() {
   const fetcher = useFetcher();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const imageUrl = fetcher.data?.imageUrl ?? "";
+
+  // imageBytesからData URLを生成する関数
+  const getImageUrl = (imageBytes: string | undefined) => {
+    if (!imageBytes) return "";
+    return `data:image/png;base64,${imageBytes}`;
+  };
+
+  const imageUrl = getImageUrl(fetcher.data?.imageBytes);
 
   return (
     <div className="max-w-5xl mx-auto p-8">
@@ -119,7 +125,7 @@ export default function Index() {
         </fetcher.Form>
         <div className="min-h-[320px] border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-gray-50">
           {/* 生成された4コマ漫画画像をここに表示 */}
-          {imageUrl ? (
+          {fetcher.data?.imageBytes ? (
             <img
               src={imageUrl}
               alt="4コマ漫画"
