@@ -10,7 +10,7 @@ interface FileUploaderProps {
 
 export function FileUploader({ onTextLoaded }: FileUploaderProps) {
   if (typeof window === "undefined") return <></>;
-  const [uppy] = useState(
+  const [uppy] = useState(() =>
     new Uppy({
       restrictions: { maxNumberOfFiles: 1, allowedFileTypes: [".txt"] },
       autoProceed: true,
