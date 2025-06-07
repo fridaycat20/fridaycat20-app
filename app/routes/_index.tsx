@@ -1,7 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
-import { useRef } from "react";
-import type { MetaFunction } from "react-router";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
+import type { MetaFunction } from "react-router";
+import { ConfirmModal } from "../components/ConfirmModal";
+import { FileUploader } from "../components/FileUploader";
 
 export const meta: MetaFunction = () => {
   return [
@@ -24,29 +26,44 @@ export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
   const minutes = formData.get("minutes");
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.0-flash-001",
-    contents: minutes?.toString() ?? "",
-    config: {
-      systemInstruction:
-        "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。出力は英語にしてください。",
-    },
-  });
+  // 議事録が空の場合は処理しない
+  if (!minutes || minutes.toString().trim() === "") {
+    return { error: "議事録を入力してください" };
+  }
 
-  console.log(response.text);
-  const response2 = await ai.models.generateImages({
-    model: "imagen-4.0-generate-preview-05-20",
-    prompt: 'Please turn the following text into a 4-panel comic.：' + response.text?.toString(),
-    config: {
-      numberOfImages: 1,
-    },
-  });
-  console.log(response2?.generatedImages?.[0]?.image?.imageBytes);
+  try {
+    // Geminiモデルでテキスト生成
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash-001",
+      contents: minutes.toString(),
+      config: {
+        systemInstruction:
+          "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。出力は英語にしてください。",
+      },
+    });
 
-  // ここで minutes を使って4コマ漫画を生成する処理を追加
-  return {
-    imageBytes: response2?.generatedImages?.[0]?.image?.imageBytes,
-  };
+    // 生成されたテキストを元に画像生成
+    const response2 = await ai.models.generateImages({
+      model: "imagen-4.0-generate-preview-05-20",
+      prompt: `Please turn the following text into a 4-panel comic.：${response.text?.toString() ?? ""}`,
+      config: {
+        numberOfImages: 1,
+      },
+    });
+
+    // 画像があればBase64エンコードされたデータを返す
+    const imageBytes = response2?.generatedImages?.[0]?.image?.imageBytes;
+
+    return {
+      imageBytes,
+      generatedText: response.text,
+    };
+  } catch (error) {
+    console.error("AI処理中にエラーが発生しました:", error);
+    return {
+      error: "AI処理中にエラーが発生しました。しばらくしてからお試しください。",
+    };
+  }
 };
 
 export const loader = async () => {
@@ -56,14 +73,49 @@ export const loader = async () => {
 export default function Index() {
   const fetcher = useFetcher();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [pendingText, setPendingText] = useState<string | null>(null);
 
-  // imageBytesからData URLを生成する関数
-  const getImageUrl = (imageBytes: string | undefined) => {
+  // 画像URLの生成
+  const imageUrl = useMemo(() => {
+    const imageBytes = fetcher.data?.imageBytes;
     if (!imageBytes) return "";
     return `data:image/png;base64,${imageBytes}`;
-  };
+  }, [fetcher.data?.imageBytes]);
 
-  const imageUrl = getImageUrl(fetcher.data?.imageBytes);
+  // エラーの取得
+  const error = useMemo(() => {
+    return fetcher.data?.error;
+  }, [fetcher.data?.error]);
+
+  // アップロードされたファイルのテキスト処理
+  const handleTextLoaded = useCallback((text: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    // 既存テキストがあれば確認モーダルを表示
+    if (textarea.value.trim() !== "") {
+      setPendingText(text);
+      setShowModal(true);
+    } else {
+      textarea.value = text;
+    }
+  }, []);
+
+  // モーダルでOKを押したとき
+  const handleModalOk = useCallback(() => {
+    if (textareaRef.current && pendingText !== null) {
+      textareaRef.current.value = pendingText;
+    }
+    setShowModal(false);
+    setPendingText(null);
+  }, [pendingText]);
+
+  // モーダルでキャンセルを押したとき
+  const handleModalCancel = useCallback(() => {
+    setShowModal(false);
+    setPendingText(null);
+  }, []);
 
   return (
     <div className="max-w-5xl mx-auto p-8">
@@ -104,6 +156,20 @@ export default function Index() {
         <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
       </header>
       <main className="mt-8">
+        {/* ファイルアップローダー */}
+        <div className="mb-4">
+          <FileUploader onTextLoaded={handleTextLoaded} />
+        </div>
+
+        {/* 確認モーダル */}
+        {showModal && (
+          <ConfirmModal
+            onCancel={handleModalCancel}
+            onConfirm={handleModalOk}
+          />
+        )}
+
+        {/* フォーム */}
         <fetcher.Form method="post" className="space-y-0">
           <label htmlFor="minutes" className="block font-bold mb-2">
             議事録を入力
@@ -116,16 +182,28 @@ export default function Index() {
             className="w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
             placeholder="ここに議事録を入力してください"
           />
+
+          {/* エラー表示 */}
+          {error && <div className="text-red-500 mb-4">{error}</div>}
+
           <button
             type="submit"
-            className="block w-full py-3 text-lg font-bold bg-gray-800 text-white border-none rounded-lg cursor-pointer mb-6 hover:bg-gray-700 transition"
+            disabled={fetcher.state === "submitting"}
+            className={`block w-full py-3 text-lg font-bold bg-gray-800 text-white border-none rounded-lg cursor-pointer mb-6 hover:bg-gray-700 transition ${
+              fetcher.state === "submitting"
+                ? "opacity-70 cursor-not-allowed"
+                : ""
+            }`}
           >
-            4コマ漫画を生成する
+            {fetcher.state === "submitting"
+              ? "生成中..."
+              : "4コマ漫画を生成する"}
           </button>
         </fetcher.Form>
+
+        {/* 画像表示エリア */}
         <div className="min-h-[320px] border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-gray-50">
-          {/* 生成された4コマ漫画画像をここに表示 */}
-          {fetcher.data?.imageBytes ? (
+          {imageUrl ? (
             <img
               src={imageUrl}
               alt="4コマ漫画"
