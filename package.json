@@ -13,6 +13,7 @@
     "check": "biome check --write"
   },
   "dependencies": {
+    "@google-cloud/speech": "^7.1.0",
     "@google/genai": "^1.2.0",
     "@react-router/fs-routes": "^7.6.0",
     "@react-router/node": "^7.6.0",

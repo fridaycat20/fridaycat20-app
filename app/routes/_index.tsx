@@ -1,9 +1,13 @@
+import speech, { type protos } from "@google-cloud/speech";
 import { GoogleGenAI } from "@google/genai";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useFetcher } from "react-router";
 import type { MetaFunction } from "react-router";
+import { useFetcher } from "react-router";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
+
+// タブの種類を定義
+type InputTab = "text" | "audio";
 
 export const meta: MetaFunction = () => {
   return [
@@ -25,17 +29,60 @@ export const action = async ({ request }: { request: Request }) => {
 
   const formData = await request.formData();
   const minutes = formData.get("minutes");
+  const audioFile = formData.get("audioFile");
 
-  // 議事録が空の場合は処理しない
-  if (!minutes || minutes.toString().trim() === "") {
-    return { error: "議事録を入力してください" };
+  // 議事録 または 音声ファイルが送信されていない場合はエラー
+  if ((!minutes || minutes.toString().trim() === "") && !audioFile) {
+    return { error: "議事録または音声ファイルを入力してください。" };
+  }
+
+  let text = minutes ? minutes.toString().trim() : "";
+
+  // 音声ファイルが送信された場合、Google Cloud Speech-to-Text APIで処理
+  if (audioFile && audioFile instanceof File) {
+    try {
+      // Google Cloud Speech クライアントを作成
+      const client = new speech.SpeechClient();
+
+      // 音声ファイルをバッファに変換
+      const arrayBuffer = await audioFile.arrayBuffer();
+      const audioBytes = Buffer.from(arrayBuffer);
+
+      // Speech-to-Text APIのリクエスト設定
+      const request: protos.google.cloud.speech.v1.IRecognizeRequest = {
+        audio: {
+          content: audioBytes.toString("base64"),
+        },
+        config: {
+          encoding: "MP3", // 音声ファイルのエンコーディング形式
+          sampleRateHertz: 16000, // 音声ファイルのサンプリングレート
+          languageCode: "ja-JP", // 日本語の音声認識
+        },
+      };
+
+      // Speech-to-Text APIで音声認識を実行
+      const [response] = await client.recognize(request);
+      console.log("音声認識結果:", response);
+
+      text = response?.results
+        ? response.results
+            .map((result) => result.alternatives?.[0].transcript)
+            .join(" ")
+        : "";
+      console.log("音声認識されたテキスト:", text);
+    } catch (error) {
+      console.error("音声認識エラー:", error);
+      return {
+        error: "音声認識に失敗しました。",
+      };
+    }
   }
 
   try {
     // Geminiモデルでテキスト生成
     const response = await ai.models.generateContent({
       model: "gemini-2.0-flash-001",
-      contents: minutes.toString(),
+      contents: text,
       config: {
         systemInstruction:
           "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。出力は英語にしてください。",
@@ -75,6 +122,19 @@ export default function Index() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showModal, setShowModal] = useState(false);
   const [pendingText, setPendingText] = useState<string | null>(null);
+  // 現在選択中のタブを管理する状態
+  const [activeTab, setActiveTab] = useState<InputTab>("text");
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+
+  // 音声ファイルが選択されたときのハンドラ
+  const handleAudioFileChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setAudioFile(file);
+    }
+  };
 
   // 画像URLの生成
   const imageUrl = useMemo(() => {
@@ -156,11 +216,6 @@ export default function Index() {
         <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
       </header>
       <main className="mt-8">
-        {/* ファイルアップローダー */}
-        <div className="mb-4">
-          <FileUploader onTextLoaded={handleTextLoaded} />
-        </div>
-
         {/* 確認モーダル */}
         {showModal && (
           <ConfirmModal
@@ -169,28 +224,89 @@ export default function Index() {
           />
         )}
 
+        {/* タブUI */}
+        <div className="flex mb-4 border-b border-gray-200">
+          <button
+            type="button"
+            className={`py-2 px-4 font-medium text-lg ${
+              activeTab === "text"
+                ? "border-b-2 border-gray-800 text-gray-800"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+            onClick={() => setActiveTab("text")}
+          >
+            議事録入力
+          </button>
+          <button
+            type="button"
+            className={`py-2 px-4 font-medium text-lg ${
+              activeTab === "audio"
+                ? "border-b-2 border-gray-800 text-gray-800"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+            onClick={() => setActiveTab("audio")}
+          >
+            音声入力
+          </button>
+        </div>
+
         {/* フォーム */}
-        <fetcher.Form method="post" className="space-y-0">
-          <label htmlFor="minutes" className="block font-bold mb-2">
-            議事録を入力
-          </label>
-          <textarea
-            id="minutes"
-            name="minutes"
-            rows={8}
-            ref={textareaRef}
-            className="w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            placeholder="ここに議事録を入力してください"
-          />
+        <fetcher.Form
+          method="post"
+          encType="multipart/form-data"
+          className="space-y-0"
+        >
+          {/* テキスト入力タブパネル */}
+          {activeTab === "text" && (
+            <>
+              {/* ファイルアップローダー */}
+              <div className="mb-4">
+                <FileUploader onTextLoaded={handleTextLoaded} />
+              </div>
+
+              <label htmlFor="minutes" className="block font-bold mb-2">
+                議事録を入力
+              </label>
+              <textarea
+                id="minutes"
+                name="minutes"
+                rows={8}
+                ref={textareaRef}
+                className="w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                placeholder="ここに議事録を入力してください"
+              />
+            </>
+          )}
+
+          {/* 音声入力タブパネル */}
+          {activeTab === "audio" && (
+            <>
+              <label htmlFor="audio-file" className="block font-bold mb-2">
+                音声ファイルをアップロード
+              </label>
+              <input
+                id="audio-file"
+                name="audioFile"
+                type="file"
+                accept="audio/mp3"
+                onChange={handleAudioFileChange}
+                className="block w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            </>
+          )}
 
           {/* エラー表示 */}
           {error && <div className="text-red-500 mb-4">{error}</div>}
 
           <button
             type="submit"
-            disabled={fetcher.state === "submitting"}
+            disabled={
+              fetcher.state === "submitting" ||
+              (activeTab === "audio" && !audioFile)
+            }
             className={`block w-full py-3 text-lg font-bold bg-gray-800 text-white border-none rounded-lg cursor-pointer mb-6 hover:bg-gray-700 transition ${
-              fetcher.state === "submitting"
+              fetcher.state === "submitting" ||
+              (activeTab === "audio" && !audioFile)
                 ? "opacity-70 cursor-not-allowed"
                 : ""
             }`}
