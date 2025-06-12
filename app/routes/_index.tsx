@@ -6,6 +6,9 @@ import { useFetcher } from "react-router";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
 
+// タブの種類を定義
+type InputTab = "text" | "audio";
+
 export const meta: MetaFunction = () => {
   return [
     { title: "MangaMaker - 議事録から4コマ漫画を自動生成" },
@@ -119,9 +122,10 @@ export default function Index() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showModal, setShowModal] = useState(false);
   const [pendingText, setPendingText] = useState<string | null>(null);
-
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  // 現在選択中のタブを管理する状態
+  const [activeTab, setActiveTab] = useState<InputTab>("text");
   const [audioFile, setAudioFile] = useState<File | null>(null);
+
   // 音声ファイルが選択されたときのハンドラ
   const handleAudioFileChange = (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -130,19 +134,6 @@ export default function Index() {
     if (file) {
       setAudioFile(file);
     }
-  };
-
-  // 音声ファイルをサーバーサイドで処理するハンドラ
-  const handleTranscribeClick = () => {
-    if (!audioFile) return;
-
-    setIsTranscribing(true);
-
-    const form = new FormData();
-    form.append("audioFile", audioFile);
-
-    // fetcherを使ってサーバーにファイルを送信
-    fetcher.submit(form, { method: "post", encType: "multipart/form-data" });
   };
 
   // 画像URLの生成
@@ -225,11 +216,6 @@ export default function Index() {
         <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
       </header>
       <main className="mt-8">
-        {/* ファイルアップローダー */}
-        <div className="mb-4">
-          <FileUploader onTextLoaded={handleTextLoaded} />
-        </div>
-
         {/* 確認モーダル */}
         {showModal && (
           <ConfirmModal
@@ -238,28 +224,89 @@ export default function Index() {
           />
         )}
 
+        {/* タブUI */}
+        <div className="flex mb-4 border-b border-gray-200">
+          <button
+            type="button"
+            className={`py-2 px-4 font-medium text-lg ${
+              activeTab === "text"
+                ? "border-b-2 border-gray-800 text-gray-800"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+            onClick={() => setActiveTab("text")}
+          >
+            議事録入力
+          </button>
+          <button
+            type="button"
+            className={`py-2 px-4 font-medium text-lg ${
+              activeTab === "audio"
+                ? "border-b-2 border-gray-800 text-gray-800"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+            onClick={() => setActiveTab("audio")}
+          >
+            音声入力
+          </button>
+        </div>
+
         {/* フォーム */}
-        <fetcher.Form method="post" className="space-y-0">
-          <label htmlFor="minutes" className="block font-bold mb-2">
-            議事録を入力
-          </label>
-          <textarea
-            id="minutes"
-            name="minutes"
-            rows={8}
-            ref={textareaRef}
-            className="w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            placeholder="ここに議事録を入力してください"
-          />
+        <fetcher.Form
+          method="post"
+          encType="multipart/form-data"
+          className="space-y-0"
+        >
+          {/* テキスト入力タブパネル */}
+          {activeTab === "text" && (
+            <>
+              {/* ファイルアップローダー */}
+              <div className="mb-4">
+                <FileUploader onTextLoaded={handleTextLoaded} />
+              </div>
+
+              <label htmlFor="minutes" className="block font-bold mb-2">
+                議事録を入力
+              </label>
+              <textarea
+                id="minutes"
+                name="minutes"
+                rows={8}
+                ref={textareaRef}
+                className="w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                placeholder="ここに議事録を入力してください"
+              />
+            </>
+          )}
+
+          {/* 音声入力タブパネル */}
+          {activeTab === "audio" && (
+            <>
+              <label htmlFor="audio-file" className="block font-bold mb-2">
+                音声ファイルをアップロード
+              </label>
+              <input
+                id="audio-file"
+                name="audioFile"
+                type="file"
+                accept="audio/mp3"
+                onChange={handleAudioFileChange}
+                className="block w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            </>
+          )}
 
           {/* エラー表示 */}
           {error && <div className="text-red-500 mb-4">{error}</div>}
 
           <button
             type="submit"
-            disabled={fetcher.state === "submitting"}
+            disabled={
+              fetcher.state === "submitting" ||
+              (activeTab === "audio" && !audioFile)
+            }
             className={`block w-full py-3 text-lg font-bold bg-gray-800 text-white border-none rounded-lg cursor-pointer mb-6 hover:bg-gray-700 transition ${
-              fetcher.state === "submitting"
+              fetcher.state === "submitting" ||
+              (activeTab === "audio" && !audioFile)
                 ? "opacity-70 cursor-not-allowed"
                 : ""
             }`}
@@ -281,31 +328,6 @@ export default function Index() {
           ) : (
             <span className="text-gray-400">ここに4コマ漫画が表示されます</span>
           )}
-        </div>
-        {/* 音声認識関連のUI */}
-        <div className="mt-8">
-          <label htmlFor="audio-file" className="block font-bold mb-2">
-            音声入力
-          </label>
-          <input
-            id="audio-file"
-            type="file"
-            accept="audio/mp3"
-            onChange={handleAudioFileChange}
-            className="block w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          />
-          <button
-            type="button"
-            onClick={handleTranscribeClick}
-            disabled={isTranscribing}
-            className={`block w-full py-3 text-lg font-bold rounded-lg cursor-pointer mb-6 transition ${
-              isTranscribing
-                ? "bg-gray-400 cursor-not-allowed"
-                : "bg-gray-800 text-white hover:bg-gray-700"
-            }`}
-          >
-            {isTranscribing ? "認識中..." : "音声をテキストに変換"}
-          </button>
         </div>
       </main>
     </div>
