@@ -1,7 +1,8 @@
+import speech, { type protos } from "@google-cloud/speech";
 import { GoogleGenAI } from "@google/genai";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useFetcher } from "react-router";
 import type { MetaFunction } from "react-router";
+import { useFetcher } from "react-router";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
 
@@ -25,17 +26,60 @@ export const action = async ({ request }: { request: Request }) => {
 
   const formData = await request.formData();
   const minutes = formData.get("minutes");
+  const audioFile = formData.get("audioFile");
 
-  // 議事録が空の場合は処理しない
-  if (!minutes || minutes.toString().trim() === "") {
-    return { error: "議事録を入力してください" };
+  // 議事録 または 音声ファイルが送信されていない場合はエラー
+  if ((!minutes || minutes.toString().trim() === "") && !audioFile) {
+    return { error: "議事録または音声ファイルを入力してください。" };
+  }
+
+  let text = minutes ? minutes.toString().trim() : "";
+
+  // 音声ファイルが送信された場合、Google Cloud Speech-to-Text APIで処理
+  if (audioFile && audioFile instanceof File) {
+    try {
+      // Google Cloud Speech クライアントを作成
+      const client = new speech.SpeechClient();
+
+      // 音声ファイルをバッファに変換
+      const arrayBuffer = await audioFile.arrayBuffer();
+      const audioBytes = Buffer.from(arrayBuffer);
+
+      // Speech-to-Text APIのリクエスト設定
+      const request: protos.google.cloud.speech.v1.IRecognizeRequest = {
+        audio: {
+          content: audioBytes.toString("base64"),
+        },
+        config: {
+          encoding: "MP3", // 音声ファイルのエンコーディング形式
+          sampleRateHertz: 16000, // 音声ファイルのサンプリングレート
+          languageCode: "ja-JP", // 日本語の音声認識
+        },
+      };
+
+      // Speech-to-Text APIで音声認識を実行
+      const [response] = await client.recognize(request);
+      console.log("音声認識結果:", response);
+
+      text = response?.results
+        ? response.results
+            .map((result) => result.alternatives?.[0].transcript)
+            .join(" ")
+        : "";
+      console.log("音声認識されたテキスト:", text);
+    } catch (error) {
+      console.error("音声認識エラー:", error);
+      return {
+        error: "音声認識に失敗しました。",
+      };
+    }
   }
 
   try {
     // Geminiモデルでテキスト生成
     const response = await ai.models.generateContent({
       model: "gemini-2.0-flash-001",
-      contents: minutes.toString(),
+      contents: text,
       config: {
         systemInstruction:
           "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。出力は英語にしてください。",
@@ -75,6 +119,31 @@ export default function Index() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showModal, setShowModal] = useState(false);
   const [pendingText, setPendingText] = useState<string | null>(null);
+
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  // 音声ファイルが選択されたときのハンドラ
+  const handleAudioFileChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setAudioFile(file);
+    }
+  };
+
+  // 音声ファイルをサーバーサイドで処理するハンドラ
+  const handleTranscribeClick = () => {
+    if (!audioFile) return;
+
+    setIsTranscribing(true);
+
+    const form = new FormData();
+    form.append("audioFile", audioFile);
+
+    // fetcherを使ってサーバーにファイルを送信
+    fetcher.submit(form, { method: "post", encType: "multipart/form-data" });
+  };
 
   // 画像URLの生成
   const imageUrl = useMemo(() => {
@@ -212,6 +281,31 @@ export default function Index() {
           ) : (
             <span className="text-gray-400">ここに4コマ漫画が表示されます</span>
           )}
+        </div>
+        {/* 音声認識関連のUI */}
+        <div className="mt-8">
+          <label htmlFor="audio-file" className="block font-bold mb-2">
+            音声入力
+          </label>
+          <input
+            id="audio-file"
+            type="file"
+            accept="audio/mp3"
+            onChange={handleAudioFileChange}
+            className="block w-full text-lg p-3 rounded-lg border border-gray-300 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+          <button
+            type="button"
+            onClick={handleTranscribeClick}
+            disabled={isTranscribing}
+            className={`block w-full py-3 text-lg font-bold rounded-lg cursor-pointer mb-6 transition ${
+              isTranscribing
+                ? "bg-gray-400 cursor-not-allowed"
+                : "bg-gray-800 text-white hover:bg-gray-700"
+            }`}
+          >
+            {isTranscribing ? "認識中..." : "音声をテキストに変換"}
+          </button>
         </div>
       </main>
     </div>
