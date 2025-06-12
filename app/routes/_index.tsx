@@ -86,6 +86,34 @@ export default function Index() {
     setPendingText(null);
   }, []);
 
+  // 画像ダウンロードのハンドラ
+  const handleDownloadImage = useCallback(() => {
+    if (!streamResult?.imageBytes) return;
+
+    try {
+      // base64文字列をBlobに変換
+      const byteCharacters = atob(streamResult.imageBytes);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: "image/png" });
+
+      // ダウンロード用のリンクを作成
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `4コマ漫画_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("画像のダウンロード中にエラーが発生しました:", error);
+    }
+  }, [streamResult?.imageBytes]);
+
   // ストリーミング処理の開始
   const startStreaming = useCallback((minutes: string, hasAudio: boolean) => {
     setIsStreaming(true);
@@ -328,11 +356,34 @@ export default function Index() {
               </div>
             </div>
           ) : imageUrl ? (
-            <img
-              src={imageUrl}
-              alt="4コマ漫画"
-              className="max-h-80 object-contain"
-            />
+            <div className="flex flex-col items-center space-y-4">
+              <img
+                src={imageUrl}
+                alt="4コマ漫画"
+                className="max-h-80 object-contain"
+              />
+              <button
+                type="button"
+                onClick={handleDownloadImage}
+                className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              >
+                <svg
+                  className="w-5 h-5 inline mr-2"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <title>ダウンロードアイコン</title>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                  />
+                </svg>
+                画像をダウンロード
+              </button>
+            </div>
           ) : (
             <span className="text-gray-400">ここに4コマ漫画が表示されます</span>
           )}
