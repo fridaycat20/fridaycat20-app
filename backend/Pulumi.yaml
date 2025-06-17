@@ -1,0 +1,6 @@
+name: fridaycat20
+runtime: nodejs
+description: A Pulumi package for managing resources in a FridayCat20 project.
+config:
+  gcp:project: fridaycat20
+  gcp:region: us-central1
