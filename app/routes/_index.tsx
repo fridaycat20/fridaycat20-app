@@ -2,9 +2,11 @@ import speech, { type protos } from "@google-cloud/speech";
 import { GoogleGenAI } from "@google/genai";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { MetaFunction } from "react-router";
-import { useFetcher } from "react-router";
+import { useFetcher, Navigate } from "react-router";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
+import { useAuth } from "~/context/AuthContext";
+import { Logo } from "~/components/Logo";
 
 // タブの種類を定義
 type InputTab = "text" | "audio";
@@ -118,6 +120,7 @@ export const loader = async () => {
 };
 
 export default function Index() {
+  const { user, loading, logout } = useAuth();
   const fetcher = useFetcher();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showModal, setShowModal] = useState(false);
@@ -125,6 +128,7 @@ export default function Index() {
   // 現在選択中のタブを管理する状態
   const [activeTab, setActiveTab] = useState<InputTab>("text");
   const [audioFile, setAudioFile] = useState<File | null>(null);
+
 
   // 音声ファイルが選択されたときのハンドラ
   const handleAudioFileChange = (
@@ -177,43 +181,51 @@ export default function Index() {
     setPendingText(null);
   }, []);
 
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-lg">読み込み中...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-5xl mx-auto p-8">
-      <header className="flex items-center gap-2 py-4 justify-center">
-        {/* Manga風の本のアイコン */}
-        <svg
-          width="32"
-          height="32"
-          viewBox="0 0 32 32"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          className="inline align-middle"
-        >
-          <title>マンガ風の本のアイコン</title>
-          <rect
-            x="4"
-            y="6"
-            width="10"
-            height="20"
-            rx="2"
-            fill="#f3f4f6"
-            stroke="#22223b"
-            strokeWidth="2"
-          />
-          <rect
-            x="18"
-            y="6"
-            width="10"
-            height="20"
-            rx="2"
-            fill="#f3f4f6"
-            stroke="#22223b"
-            strokeWidth="2"
-          />
-          <path d="M14 8L18 8" stroke="#22223b" strokeWidth="2" />
-          <path d="M14 24L18 24" stroke="#22223b" strokeWidth="2" />
-        </svg>
-        <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
+      <header className="flex items-center justify-between py-4">
+        <div className="flex items-center gap-2">
+          <Logo className="inline align-middle" />
+          <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
+        </div>
+        <div className="flex items-center gap-4">
+          {user ? (
+            <>
+              <span className="text-sm text-gray-600">{user.email}</span>
+              <button
+                type="button"
+                onClick={logout}
+                className="text-sm text-red-600 hover:text-red-800"
+              >
+                ログアウト
+              </button>
+            </>
+          ) : (
+            <div className="flex gap-2">
+              <a
+                href="/login"
+                className="text-sm text-indigo-600 hover:text-indigo-800"
+              >
+                ログイン
+              </a>
+              <span className="text-sm text-gray-300">|</span>
+              <a
+                href="/register"
+                className="text-sm text-indigo-600 hover:text-indigo-800"
+              >
+                新規登録
+              </a>
+            </div>
+          )}
+        </div>
       </header>
       <main className="mt-8">
         {/* 確認モーダル */}
