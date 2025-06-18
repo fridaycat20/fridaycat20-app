@@ -1,2 +1,0 @@
-secretsprovider: gcpkms://projects/fridaycat20/locations/us-central1/keyRings/pulumi-secrets/cryptoKeys/pulumi-key
-encryptedkey: CiQA0LNMsC2UBcBCxec6uju3xvFj/v5TK9vlE+41saj1MPjVw2ISSQByNDYZHbcm3hxT8vaUBGmJGUwEw7jVXFOzEUt4UtPuecydRV2cChNi9eoPuhlUUVDEw/MMm5SG7Gl9VtX3pSd9cVxBxPE844A=
