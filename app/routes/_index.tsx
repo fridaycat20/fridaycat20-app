@@ -1,8 +1,15 @@
 import speech, { type protos } from "@google-cloud/speech";
 import { GoogleGenAI } from "@google/genai";
 import { useCallback, useMemo, useRef, useState } from "react";
-import type { MetaFunction } from "react-router";
-import { useFetcher } from "react-router";
+import type {
+  ActionFunctionArgs,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
+import { Logo } from "~/components/Logo";
+import { saveComicToStorage } from "~/lib/firebase-admin";
+import { getVerifiedUser } from "~/lib/session-utils.server";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
 
@@ -20,7 +27,12 @@ export const meta: MetaFunction = () => {
   ];
 };
 
-export const action = async ({ request }: { request: Request }) => {
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const user = await getVerifiedUser(request);
+  return { user };
+};
+
+export const action = async ({ request }: ActionFunctionArgs) => {
   const ai = new GoogleGenAI({
     vertexai: true,
     location: "us-central1",
@@ -30,6 +42,10 @@ export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
   const minutes = formData.get("minutes");
   const audioFile = formData.get("audioFile");
+
+  // セッションからユーザーを取得・検証
+  const user = await getVerifiedUser(request);
+  const userId = user?.id || null;
 
   // 議事録 または 音声ファイルが送信されていない場合はエラー
   if ((!minutes || minutes.toString().trim() === "") && !audioFile) {
@@ -101,9 +117,25 @@ export const action = async ({ request }: { request: Request }) => {
     // 画像があればBase64エンコードされたデータを返す
     const imageBytes = response2?.generatedImages?.[0]?.image?.imageBytes;
 
+    // ログインユーザーの場合は画像を自動保存
+    let savedComic = null;
+    if (userId && imageBytes) {
+      try {
+        savedComic = await saveComicToStorage(
+          userId,
+          imageBytes,
+          response.text?.toString() || "",
+        );
+      } catch (error) {
+        console.error("画像保存エラー:", error);
+        // 保存エラーでも画像は返す
+      }
+    }
+
     return {
       imageBytes,
       generatedText: response.text,
+      savedComic,
     };
   } catch (error) {
     console.error("AI処理中にエラーが発生しました:", error);
@@ -113,11 +145,8 @@ export const action = async ({ request }: { request: Request }) => {
   }
 };
 
-export const loader = async () => {
-  return {};
-};
-
 export default function Index() {
+  const { user } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showModal, setShowModal] = useState(false);
@@ -125,7 +154,6 @@ export default function Index() {
   // 現在選択中のタブを管理する状態
   const [activeTab, setActiveTab] = useState<InputTab>("text");
   const [audioFile, setAudioFile] = useState<File | null>(null);
-
   // 音声ファイルが選択されたときのハンドラ
   const handleAudioFileChange = (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -177,43 +205,61 @@ export default function Index() {
     setPendingText(null);
   }, []);
 
+  // remix-authを使用したフォーム送信
+  const handleSubmit = useCallback(
+    (event: React.FormEvent) => {
+      event.preventDefault();
+      const form = event.currentTarget as HTMLFormElement;
+      const formData = new FormData(form);
+      fetcher.submit(formData, { method: "POST" });
+    },
+    [fetcher],
+  );
+
   return (
     <div className="max-w-5xl mx-auto p-8">
-      <header className="flex items-center gap-2 py-4 justify-center">
-        {/* Manga風の本のアイコン */}
-        <svg
-          width="32"
-          height="32"
-          viewBox="0 0 32 32"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          className="inline align-middle"
-        >
-          <title>マンガ風の本のアイコン</title>
-          <rect
-            x="4"
-            y="6"
-            width="10"
-            height="20"
-            rx="2"
-            fill="#f3f4f6"
-            stroke="#22223b"
-            strokeWidth="2"
-          />
-          <rect
-            x="18"
-            y="6"
-            width="10"
-            height="20"
-            rx="2"
-            fill="#f3f4f6"
-            stroke="#22223b"
-            strokeWidth="2"
-          />
-          <path d="M14 8L18 8" stroke="#22223b" strokeWidth="2" />
-          <path d="M14 24L18 24" stroke="#22223b" strokeWidth="2" />
-        </svg>
-        <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
+      <header className="flex items-center justify-between py-4">
+        <div className="flex items-center gap-2">
+          <Logo className="inline align-middle" />
+          <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
+        </div>
+        <div className="flex items-center gap-4">
+          {user ? (
+            <>
+              <a
+                href="/gallery"
+                className="text-sm text-indigo-600 hover:text-indigo-800"
+              >
+                ギャラリー
+              </a>
+              <span className="text-sm text-gray-600">{user.email}</span>
+              <form method="POST" action="/logout" className="inline">
+                <button
+                  type="submit"
+                  className="text-sm text-red-600 hover:text-red-800"
+                >
+                  ログアウト
+                </button>
+              </form>
+            </>
+          ) : (
+            <div className="flex gap-2">
+              <a
+                href="/login"
+                className="text-sm text-indigo-600 hover:text-indigo-800"
+              >
+                ログイン
+              </a>
+              <span className="text-sm text-gray-300">|</span>
+              <a
+                href="/register"
+                className="text-sm text-indigo-600 hover:text-indigo-800"
+              >
+                新規登録
+              </a>
+            </div>
+          )}
+        </div>
       </header>
       <main className="mt-8">
         {/* 確認モーダル */}
@@ -251,11 +297,7 @@ export default function Index() {
         </div>
 
         {/* フォーム */}
-        <fetcher.Form
-          method="post"
-          encType="multipart/form-data"
-          className="space-y-0"
-        >
+        <form onSubmit={handleSubmit} className="space-y-0">
           {/* テキスト入力タブパネル */}
           {activeTab === "text" && (
             <>
@@ -315,16 +357,32 @@ export default function Index() {
               ? "生成中..."
               : "4コマ漫画を生成する"}
           </button>
-        </fetcher.Form>
+        </form>
 
         {/* 画像表示エリア */}
-        <div className="min-h-[320px] border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-gray-50">
+        <div className="min-h-[320px] border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center bg-gray-50 gap-4">
           {imageUrl ? (
-            <img
-              src={imageUrl}
-              alt="4コマ漫画"
-              className="max-h-80 object-contain"
-            />
+            <>
+              <img
+                src={imageUrl}
+                alt="4コマ漫画"
+                className="max-h-80 object-contain"
+              />
+              <div className="flex gap-2">
+                {fetcher.data?.savedComic && (
+                  <div className="px-4 py-2 bg-green-100 text-green-800 rounded-md border border-green-300">
+                    ✓ 保存済み
+                  </div>
+                )}
+                <a
+                  href={imageUrl}
+                  download="4comic-manga.png"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                >
+                  ダウンロード
+                </a>
+              </div>
+            </>
           ) : (
             <span className="text-gray-400">ここに4コマ漫画が表示されます</span>
           )}
