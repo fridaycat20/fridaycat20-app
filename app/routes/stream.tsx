@@ -1,9 +1,19 @@
+import speech, { type protos } from "@google-cloud/speech";
 import { GoogleGenAI } from "@google/genai";
+import { saveComicToStorage } from "~/lib/firebase-admin";
+import { getVerifiedUser } from "~/lib/session-utils.server";
 
-export const loader = async ({ request }: { request: Request }) => {
-  const url = new URL(request.url);
-  const minutes = url.searchParams.get("minutes");
-  const hasAudio = url.searchParams.get("hasAudio") === "true";
+export const action = async ({ request }: { request: Request }) => {
+  const formData = await request.formData();
+  const minutes = formData.get("minutes");
+  const audioFile = formData.get("audioFile");
+
+  let text = minutes ? minutes.toString().trim() : "";
+  const hasAudio = !!audioFile;
+
+  // セッションからユーザーを取得・検証
+  const user = await getVerifiedUser(request);
+  const userId = user?.id || null;
 
   // Server-Sent Eventsのヘッダーを設定
   const stream = new ReadableStream({
@@ -24,20 +34,54 @@ export const loader = async ({ request }: { request: Request }) => {
             project: "fridaycat20",
           });
 
-          const text = minutes || "";
-
-          // 音声処理のステップ（実際の実装では音声ファイルが必要）
-          if (hasAudio) {
+          // 音声処理のステップ
+          if (hasAudio && audioFile instanceof File) {
             sendEvent("status", "音声を認識中...");
-            // ここで実際の音声認識処理を行う
-            await new Promise((resolve) => setTimeout(resolve, 2000)); // デモ用の遅延
+            try {
+              // Google Cloud Speech クライアントを作成
+              const client = new speech.SpeechClient();
+
+              // 音声ファイルをバッファに変換
+              const arrayBuffer = await audioFile.arrayBuffer();
+              const audioBytes = Buffer.from(arrayBuffer);
+
+              // Speech-to-Text APIのリクエスト設定
+              const speechRequest: protos.google.cloud.speech.v1.IRecognizeRequest =
+                {
+                  audio: {
+                    content: audioBytes.toString("base64"),
+                  },
+                  config: {
+                    encoding: "MP3",
+                    sampleRateHertz: 16000,
+                    languageCode: "ja-JP",
+                  },
+                };
+
+              // Speech-to-Text APIで音声認識を実行
+              const [response] = await client.recognize(speechRequest);
+              text = response?.results
+                ? response.results
+                    .map((result) => result.alternatives?.[0].transcript)
+                    .join(" ")
+                : "";
+            } catch (error) {
+              console.error("音声認識エラー:", error);
+              sendEvent("error", "音声認識に失敗しました。");
+              return;
+            }
           }
 
           // テキスト生成のステップ
           sendEvent("status", "内容を要約中...");
           const response = await ai.models.generateContent({
             model: "gemini-2.0-flash-001",
-            contents: text,
+            contents: [
+              {
+                role: "user",
+                parts: [{ text: text }],
+              },
+            ],
             config: {
               systemInstruction:
                 "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。出力は英語にしてください。",
@@ -54,14 +98,34 @@ export const loader = async ({ request }: { request: Request }) => {
             },
           });
 
+          // 画像があればBase64エンコードされたデータを返す
+          const imageBytes = response2?.generatedImages?.[0]?.image?.imageBytes;
+
+          // ログインユーザーの場合は画像を自動保存
+          let savedComic = null;
+          if (userId && imageBytes) {
+            try {
+              savedComic = await saveComicToStorage(
+                userId,
+                imageBytes,
+                response.text?.toString() || "",
+              );
+            } catch (error) {
+              console.error("画像保存エラー:", error);
+              // 保存エラーでも画像は返す
+            }
+          }
+
           // 完了
-          sendEvent(
-            "complete",
-            JSON.stringify({
-              imageBytes: response2?.generatedImages?.[0]?.image?.imageBytes,
-              generatedText: response.text,
-            }),
-          );
+          const completeData = {
+            imageBytes: response2?.generatedImages?.[0]?.image?.imageBytes,
+            generatedText: response.text,
+            savedComic,
+          };
+
+          console.log("Complete data:", completeData);
+
+          sendEvent("complete", JSON.stringify(completeData));
         } catch (error) {
           console.error("ストリーミング処理中にエラー:", error);
           sendEvent("error", "処理中にエラーが発生しました。");

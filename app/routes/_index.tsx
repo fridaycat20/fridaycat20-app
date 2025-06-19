@@ -1,5 +1,15 @@
+import speech, { type protos } from "@google-cloud/speech";
+import { GoogleGenAI } from "@google/genai";
 import { useCallback, useMemo, useRef, useState } from "react";
-import type { MetaFunction } from "react-router";
+import type {
+  ActionFunctionArgs,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
+import { Logo } from "~/components/Logo";
+import { saveComicToStorage } from "~/lib/firebase-admin";
+import { getVerifiedUser } from "~/lib/session-utils.server";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
 
@@ -17,7 +27,14 @@ export const meta: MetaFunction = () => {
   ];
 };
 
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const user = await getVerifiedUser(request);
+  return { user };
+};
+
 export default function Index() {
+  const { user } = useLoaderData<typeof loader>();
+  const fetcher = useFetcher();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showModal, setShowModal] = useState(false);
   const [pendingText, setPendingText] = useState<string | null>(null);
@@ -86,82 +103,105 @@ export default function Index() {
     setPendingText(null);
   }, []);
 
-  // 画像ダウンロードのハンドラ
-  const handleDownloadImage = useCallback(() => {
-    if (!streamResult?.imageBytes) return;
-
-    try {
-      // base64文字列をBlobに変換
-      const byteCharacters = atob(streamResult.imageBytes);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: "image/png" });
-
-      // ダウンロード用のリンクを作成
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `4コマ漫画_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.png`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error("画像のダウンロード中にエラーが発生しました:", error);
-    }
-  }, [streamResult?.imageBytes]);
-
   // ストリーミング処理の開始
-  const startStreaming = useCallback((minutes: string, hasAudio: boolean) => {
+  const startStreaming = useCallback((formData: FormData) => {
     setIsStreaming(true);
     setLoadingStatus("");
     setStreamResult(null);
 
-    const params = new URLSearchParams({
-      minutes: minutes,
-      hasAudio: hasAudio.toString(),
-    });
+    // POSTリクエストでストリーミングを開始
+    fetch("/stream", {
+      method: "POST",
+      body: formData,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("Network response was not ok");
+        }
 
-    const eventSource = new EventSource(`/stream?${params}`);
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error("No reader available");
+        }
 
-    eventSource.addEventListener("status", (e) => {
-      setLoadingStatus((e as MessageEvent).data);
-    });
+        const decoder = new TextDecoder();
 
-    eventSource.addEventListener("complete", (e) => {
-      try {
-        const result = JSON.parse((e as MessageEvent).data);
-        setStreamResult(result);
+        let currentEvent = "";
+        let buffer = "";
+
+        const readStream = () => {
+          reader
+            .read()
+            .then(({ done, value }) => {
+              if (done) {
+                setIsStreaming(false);
+                return;
+              }
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+
+              // 最後の行は不完全な可能性があるので保持
+              buffer = lines.pop() || "";
+
+              for (const line of lines) {
+                if (line.startsWith("event: ")) {
+                  currentEvent = line.slice(7);
+                  continue;
+                }
+
+                if (line.startsWith("data: ")) {
+                  const data = line.slice(6);
+
+                  if (currentEvent === "status") {
+                    setLoadingStatus(data);
+                  } else if (currentEvent === "complete") {
+                    try {
+                      console.log("Received complete data:", data);
+                      const result = JSON.parse(data);
+                      console.log("Parsed result:", result);
+                      setStreamResult(result);
+                      setIsStreaming(false);
+                      setLoadingStatus("");
+                    } catch (error) {
+                      console.error("結果のパース中にエラー:", error);
+                      console.error("Raw data:", data);
+                      setLoadingStatus("結果の処理中にエラーが発生しました。");
+                      setIsStreaming(false);
+                    }
+                  } else if (currentEvent === "error") {
+                    setLoadingStatus(data || "エラーが発生しました。");
+                    setIsStreaming(false);
+                  }
+
+                  currentEvent = ""; // リセット
+                }
+              }
+
+              readStream();
+            })
+            .catch((error) => {
+              console.error("ストリーミング読み込みエラー:", error);
+              setLoadingStatus("接続エラーが発生しました。");
+              setIsStreaming(false);
+            });
+        };
+
+        readStream();
+      })
+      .catch((error) => {
+        console.error("ストリーミング開始エラー:", error);
+        setLoadingStatus("接続エラーが発生しました。");
         setIsStreaming(false);
-        setLoadingStatus("");
-      } catch (error) {
-        console.error("結果のパース中にエラー:", error);
-        setLoadingStatus("結果の処理中にエラーが発生しました。");
-        setIsStreaming(false);
-      }
-      eventSource.close();
-    });
-
-    eventSource.addEventListener("error", (e) => {
-      setLoadingStatus((e as MessageEvent).data || "エラーが発生しました。");
-      setIsStreaming(false);
-      eventSource.close();
-    });
-
-    eventSource.onerror = () => {
-      setLoadingStatus("接続エラーが発生しました。");
-      setIsStreaming(false);
-      eventSource.close();
-    };
+      });
   }, []);
 
   // フォーム送信のハンドラ
   const handleSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
+      const form = event.currentTarget as HTMLFormElement;
+      const formData = new FormData(form);
 
       if (activeTab === "text") {
         const minutes = textareaRef.current?.value?.trim() || "";
@@ -169,53 +209,63 @@ export default function Index() {
           setLoadingStatus("議事録を入力してください。");
           return;
         }
-        startStreaming(minutes, false);
+        formData.set("minutes", minutes);
       } else if (activeTab === "audio" && audioFile) {
-        // 音声ファイルの場合は、ファイルを読み込んでからストリーミングを開始
-        // 実際の実装では、音声ファイルをサーバーにアップロードしてから処理する必要があります
-        startStreaming("", true);
+        formData.set("audioFile", audioFile);
+      } else {
+        setLoadingStatus("入力内容を確認してください。");
+        return;
       }
+
+      startStreaming(formData);
     },
     [activeTab, audioFile, startStreaming],
   );
 
   return (
     <div className="max-w-5xl mx-auto p-8">
-      <header className="flex items-center gap-2 py-4 justify-center">
-        {/* Manga風の本のアイコン */}
-        <svg
-          width="32"
-          height="32"
-          viewBox="0 0 32 32"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          className="inline align-middle"
-        >
-          <title>マンガ風の本のアイコン</title>
-          <rect
-            x="4"
-            y="6"
-            width="10"
-            height="20"
-            rx="2"
-            fill="#f3f4f6"
-            stroke="#22223b"
-            strokeWidth="2"
-          />
-          <rect
-            x="18"
-            y="6"
-            width="10"
-            height="20"
-            rx="2"
-            fill="#f3f4f6"
-            stroke="#22223b"
-            strokeWidth="2"
-          />
-          <path d="M14 8L18 8" stroke="#22223b" strokeWidth="2" />
-          <path d="M14 24L18 24" stroke="#22223b" strokeWidth="2" />
-        </svg>
-        <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
+      <header className="flex items-center justify-between py-4">
+        <div className="flex items-center gap-2">
+          <Logo className="inline align-middle" />
+          <span className="font-bold text-2xl tracking-wide">MangaMaker</span>
+        </div>
+        <div className="flex items-center gap-4">
+          {user ? (
+            <>
+              <a
+                href="/gallery"
+                className="text-sm text-indigo-600 hover:text-indigo-800"
+              >
+                ギャラリー
+              </a>
+              <span className="text-sm text-gray-600">{user.email}</span>
+              <form method="POST" action="/logout" className="inline">
+                <button
+                  type="submit"
+                  className="text-sm text-red-600 hover:text-red-800"
+                >
+                  ログアウト
+                </button>
+              </form>
+            </>
+          ) : (
+            <div className="flex gap-2">
+              <a
+                href="/login"
+                className="text-sm text-indigo-600 hover:text-indigo-800"
+              >
+                ログイン
+              </a>
+              <span className="text-sm text-gray-300">|</span>
+              <a
+                href="/register"
+                className="text-sm text-indigo-600 hover:text-indigo-800"
+              >
+                新規登録
+              </a>
+            </div>
+          )}
+        </div>
       </header>
       <main className="mt-8">
         {/* 確認モーダル */}
@@ -310,7 +360,7 @@ export default function Index() {
         </form>
 
         {/* 画像表示エリア */}
-        <div className="min-h-[320px] border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-gray-50">
+        <div className="min-h-[320px] border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center bg-gray-50 gap-4">
           {isStreaming ? (
             <div className="flex flex-col items-center justify-center space-y-4">
               {/* ローディングスピナー */}
@@ -330,11 +380,16 @@ export default function Index() {
                 <div className="mt-3 flex justify-center space-x-2">
                   <div
                     className={`w-2 h-2 rounded-full ${
-                      loadingStatus.includes("音声") ||
-                      loadingStatus.includes("要約") ||
-                      loadingStatus.includes("生成")
+                      activeTab === "audio" &&
+                      (
+                        loadingStatus.includes("音声") ||
+                          loadingStatus.includes("要約") ||
+                          loadingStatus.includes("生成")
+                      )
                         ? "bg-gray-800"
-                        : "bg-gray-300"
+                        : activeTab === "audio"
+                          ? "bg-gray-300"
+                          : "hidden"
                     }`}
                   />
                   <div
@@ -362,27 +417,34 @@ export default function Index() {
                 alt="4コマ漫画"
                 className="max-h-80 object-contain"
               />
-              <button
-                type="button"
-                onClick={handleDownloadImage}
-                className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-              >
-                <svg
-                  className="w-5 h-5 inline mr-2"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+              <div className="flex gap-2">
+                {fetcher.data?.savedComic && (
+                  <div className="px-4 py-2 bg-green-100 text-green-800 rounded-md border border-green-300">
+                    ✓ 保存済み
+                  </div>
+                )}
+                <a
+                  href={imageUrl}
+                  download="4comic-manga.png"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
                 >
-                  <title>ダウンロードアイコン</title>
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-                画像をダウンロード
-              </button>
+                  <svg
+                    className="w-5 h-5 inline mr-2"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <title>ダウンロードアイコン</title>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  画像をダウンロード
+                </a>
+              </div>
             </div>
           ) : (
             <span className="text-gray-400">ここに4コマ漫画が表示されます</span>
