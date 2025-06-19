@@ -32,119 +32,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return { user };
 };
 
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const ai = new GoogleGenAI({
-    vertexai: true,
-    location: "us-central1",
-    project: "fridaycat20",
-  });
-
-  const formData = await request.formData();
-  const minutes = formData.get("minutes");
-  const audioFile = formData.get("audioFile");
-
-  // セッションからユーザーを取得・検証
-  const user = await getVerifiedUser(request);
-  const userId = user?.id || null;
-
-  // 議事録 または 音声ファイルが送信されていない場合はエラー
-  if ((!minutes || minutes.toString().trim() === "") && !audioFile) {
-    return { error: "議事録または音声ファイルを入力してください。" };
-  }
-
-  let text = minutes ? minutes.toString().trim() : "";
-
-  // 音声ファイルが送信された場合、Google Cloud Speech-to-Text APIで処理
-  if (audioFile && audioFile instanceof File) {
-    try {
-      // Google Cloud Speech クライアントを作成
-      const client = new speech.SpeechClient();
-
-      // 音声ファイルをバッファに変換
-      const arrayBuffer = await audioFile.arrayBuffer();
-      const audioBytes = Buffer.from(arrayBuffer);
-
-      // Speech-to-Text APIのリクエスト設定
-      const request: protos.google.cloud.speech.v1.IRecognizeRequest = {
-        audio: {
-          content: audioBytes.toString("base64"),
-        },
-        config: {
-          encoding: "MP3", // 音声ファイルのエンコーディング形式
-          sampleRateHertz: 16000, // 音声ファイルのサンプリングレート
-          languageCode: "ja-JP", // 日本語の音声認識
-        },
-      };
-
-      // Speech-to-Text APIで音声認識を実行
-      const [response] = await client.recognize(request);
-      console.log("音声認識結果:", response);
-
-      text = response?.results
-        ? response.results
-            .map((result) => result.alternatives?.[0].transcript)
-            .join(" ")
-        : "";
-      console.log("音声認識されたテキスト:", text);
-    } catch (error) {
-      console.error("音声認識エラー:", error);
-      return {
-        error: "音声認識に失敗しました。",
-      };
-    }
-  }
-
-  try {
-    // Geminiモデルでテキスト生成
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash-001",
-      contents: text,
-      config: {
-        systemInstruction:
-          "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。出力は英語にしてください。",
-      },
-    });
-
-    // 生成されたテキストを元に画像生成
-    const response2 = await ai.models.generateImages({
-      model: "imagen-4.0-generate-preview-05-20",
-      prompt: `Please turn the following text into a 4-panel comic.：${response.text?.toString() ?? ""}`,
-      config: {
-        numberOfImages: 1,
-      },
-    });
-
-    // 画像があればBase64エンコードされたデータを返す
-    const imageBytes = response2?.generatedImages?.[0]?.image?.imageBytes;
-
-    // ログインユーザーの場合は画像を自動保存
-    let savedComic = null;
-    if (userId && imageBytes) {
-      try {
-        savedComic = await saveComicToStorage(
-          userId,
-          imageBytes,
-          response.text?.toString() || "",
-        );
-      } catch (error) {
-        console.error("画像保存エラー:", error);
-        // 保存エラーでも画像は返す
-      }
-    }
-
-    return {
-      imageBytes,
-      generatedText: response.text,
-      savedComic,
-    };
-  } catch (error) {
-    console.error("AI処理中にエラーが発生しました:", error);
-    return {
-      error: "AI処理中にエラーが発生しました。しばらくしてからお試しください。",
-    };
-  }
-};
-
 export default function Index() {
   const { user } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
@@ -154,6 +41,14 @@ export default function Index() {
   // 現在選択中のタブを管理する状態
   const [activeTab, setActiveTab] = useState<InputTab>("text");
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  // ローディングステータスの管理
+  const [loadingStatus, setLoadingStatus] = useState<string>("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamResult, setStreamResult] = useState<{
+    imageBytes?: string;
+    generatedText?: string;
+  } | null>(null);
+
   // 音声ファイルが選択されたときのハンドラ
   const handleAudioFileChange = (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -166,15 +61,18 @@ export default function Index() {
 
   // 画像URLの生成
   const imageUrl = useMemo(() => {
-    const imageBytes = fetcher.data?.imageBytes;
+    const imageBytes = streamResult?.imageBytes;
     if (!imageBytes) return "";
     return `data:image/png;base64,${imageBytes}`;
-  }, [fetcher.data?.imageBytes]);
+  }, [streamResult?.imageBytes]);
 
   // エラーの取得
   const error = useMemo(() => {
-    return fetcher.data?.error;
-  }, [fetcher.data?.error]);
+    if (loadingStatus.includes("エラー")) {
+      return loadingStatus;
+    }
+    return "";
+  }, [loadingStatus]);
 
   // アップロードされたファイルのテキスト処理
   const handleTextLoaded = useCallback((text: string) => {
@@ -205,15 +103,123 @@ export default function Index() {
     setPendingText(null);
   }, []);
 
-  // remix-authを使用したフォーム送信
+  // ストリーミング処理の開始
+  const startStreaming = useCallback((formData: FormData) => {
+    setIsStreaming(true);
+    setLoadingStatus("");
+    setStreamResult(null);
+
+    // POSTリクエストでストリーミングを開始
+    fetch("/stream", {
+      method: "POST",
+      body: formData,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("Network response was not ok");
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error("No reader available");
+        }
+
+        const decoder = new TextDecoder();
+
+        let currentEvent = "";
+        let buffer = "";
+
+        const readStream = () => {
+          reader
+            .read()
+            .then(({ done, value }) => {
+              if (done) {
+                setIsStreaming(false);
+                return;
+              }
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+
+              // 最後の行は不完全な可能性があるので保持
+              buffer = lines.pop() || "";
+
+              for (const line of lines) {
+                if (line.startsWith("event: ")) {
+                  currentEvent = line.slice(7);
+                  continue;
+                }
+
+                if (line.startsWith("data: ")) {
+                  const data = line.slice(6);
+
+                  if (currentEvent === "status") {
+                    setLoadingStatus(data);
+                  } else if (currentEvent === "complete") {
+                    try {
+                      console.log("Received complete data:", data);
+                      const result = JSON.parse(data);
+                      console.log("Parsed result:", result);
+                      setStreamResult(result);
+                      setIsStreaming(false);
+                      setLoadingStatus("");
+                    } catch (error) {
+                      console.error("結果のパース中にエラー:", error);
+                      console.error("Raw data:", data);
+                      setLoadingStatus("結果の処理中にエラーが発生しました。");
+                      setIsStreaming(false);
+                    }
+                  } else if (currentEvent === "error") {
+                    setLoadingStatus(data || "エラーが発生しました。");
+                    setIsStreaming(false);
+                  }
+
+                  currentEvent = ""; // リセット
+                }
+              }
+
+              readStream();
+            })
+            .catch((error) => {
+              console.error("ストリーミング読み込みエラー:", error);
+              setLoadingStatus("接続エラーが発生しました。");
+              setIsStreaming(false);
+            });
+        };
+
+        readStream();
+      })
+      .catch((error) => {
+        console.error("ストリーミング開始エラー:", error);
+        setLoadingStatus("接続エラーが発生しました。");
+        setIsStreaming(false);
+      });
+  }, []);
+
+  // フォーム送信のハンドラ
   const handleSubmit = useCallback(
-    (event: React.FormEvent) => {
+    (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       const form = event.currentTarget as HTMLFormElement;
       const formData = new FormData(form);
-      fetcher.submit(formData, { method: "POST" });
+
+      if (activeTab === "text") {
+        const minutes = textareaRef.current?.value?.trim() || "";
+        if (!minutes) {
+          setLoadingStatus("議事録を入力してください。");
+          return;
+        }
+        formData.set("minutes", minutes);
+      } else if (activeTab === "audio" && audioFile) {
+        formData.set("audioFile", audioFile);
+      } else {
+        setLoadingStatus("入力内容を確認してください。");
+        return;
+      }
+
+      startStreaming(formData);
     },
-    [fetcher],
+    [activeTab, audioFile, startStreaming],
   );
 
   return (
@@ -342,27 +348,70 @@ export default function Index() {
 
           <button
             type="submit"
-            disabled={
-              fetcher.state === "submitting" ||
-              (activeTab === "audio" && !audioFile)
-            }
+            disabled={isStreaming || (activeTab === "audio" && !audioFile)}
             className={`block w-full py-3 text-lg font-bold bg-gray-800 text-white border-none rounded-lg cursor-pointer mb-6 hover:bg-gray-700 transition ${
-              fetcher.state === "submitting" ||
-              (activeTab === "audio" && !audioFile)
+              isStreaming || (activeTab === "audio" && !audioFile)
                 ? "opacity-70 cursor-not-allowed"
                 : ""
             }`}
           >
-            {fetcher.state === "submitting"
-              ? "生成中..."
-              : "4コマ漫画を生成する"}
+            {isStreaming ? "生成中..." : "4コマ漫画を生成する"}
           </button>
         </form>
 
         {/* 画像表示エリア */}
         <div className="min-h-[320px] border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center bg-gray-50 gap-4">
-          {imageUrl ? (
-            <>
+          {isStreaming ? (
+            <div className="flex flex-col items-center justify-center space-y-4">
+              {/* ローディングスピナー */}
+              <div className="relative">
+                <div className="w-12 h-12 border-4 border-gray-300 border-t-gray-800 rounded-full animate-spin" />
+              </div>
+              {/* ローディングメッセージ */}
+              <div className="text-center">
+                <p className="text-gray-600 text-lg font-medium">
+                  {loadingStatus || "4コマ漫画を生成中..."}
+                </p>
+                <p className="text-gray-500 text-sm mt-1">
+                  しばらくお待ちください
+                </p>
+
+                {/* 進捗インジケーター */}
+                <div className="mt-3 flex justify-center space-x-2">
+                  <div
+                    className={`w-2 h-2 rounded-full ${
+                      activeTab === "audio" &&
+                      (
+                        loadingStatus.includes("音声") ||
+                          loadingStatus.includes("要約") ||
+                          loadingStatus.includes("生成")
+                      )
+                        ? "bg-gray-800"
+                        : activeTab === "audio"
+                          ? "bg-gray-300"
+                          : "hidden"
+                    }`}
+                  />
+                  <div
+                    className={`w-2 h-2 rounded-full ${
+                      loadingStatus.includes("要約") ||
+                      loadingStatus.includes("生成")
+                        ? "bg-gray-800"
+                        : "bg-gray-300"
+                    }`}
+                  />
+                  <div
+                    className={`w-2 h-2 rounded-full ${
+                      loadingStatus.includes("生成")
+                        ? "bg-gray-800"
+                        : "bg-gray-300"
+                    }`}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : imageUrl ? (
+            <div className="flex flex-col items-center space-y-4">
               <img
                 src={imageUrl}
                 alt="4コマ漫画"
@@ -379,10 +428,24 @@ export default function Index() {
                   download="4comic-manga.png"
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
                 >
-                  ダウンロード
+                  <svg
+                    className="w-5 h-5 inline mr-2"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <title>ダウンロードアイコン</title>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  画像をダウンロード
                 </a>
               </div>
-            </>
+            </div>
           ) : (
             <span className="text-gray-400">ここに4コマ漫画が表示されます</span>
           )}
