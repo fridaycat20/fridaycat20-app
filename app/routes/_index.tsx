@@ -1,20 +1,14 @@
-import speech, { type protos } from "@google-cloud/speech";
-import { GoogleGenAI } from "@google/genai";
 import { useCallback, useMemo, useRef, useState } from "react";
-import type {
-  ActionFunctionArgs,
-  LoaderFunctionArgs,
-  MetaFunction,
-} from "react-router";
+import type { LoaderFunctionArgs, MetaFunction } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { Logo } from "~/components/Logo";
-import { saveComicToStorage } from "~/lib/firebase-admin";
 import { getVerifiedUser } from "~/lib/session-utils.server";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
 
 // タブの種類を定義
 type InputTab = "text" | "audio";
+type ImageTab = "original" | "masked" | "translated";
 
 export const meta: MetaFunction = () => {
   return [
@@ -41,12 +35,28 @@ export default function Index() {
   // 現在選択中のタブを管理する状態
   const [activeTab, setActiveTab] = useState<InputTab>("text");
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  // 画像表示タブの状態
+  const [activeImageTab, setActiveImageTab] = useState<ImageTab>("original");
   // ローディングステータスの管理
   const [loadingStatus, setLoadingStatus] = useState<string>("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamResult, setStreamResult] = useState<{
     imageBytes?: string;
     generatedText?: string;
+    maskedImageBytes?: string;
+    translatedImageBytes?: string;
+    ocrResult?: {
+      fullText: string;
+      textAnnotations: Array<{
+        description: string;
+        boundingPoly: {
+          vertices: Array<{
+            x: number;
+            y: number;
+          }>;
+        };
+      }>;
+    };
   } | null>(null);
 
   // 音声ファイルが選択されたときのハンドラ
@@ -65,6 +75,20 @@ export default function Index() {
     if (!imageBytes) return "";
     return `data:image/png;base64,${imageBytes}`;
   }, [streamResult?.imageBytes]);
+
+  // マスク画像URLの生成
+  const maskedImageUrl = useMemo(() => {
+    const maskedImageBytes = streamResult?.maskedImageBytes;
+    if (!maskedImageBytes) return "";
+    return `data:image/png;base64,${maskedImageBytes}`;
+  }, [streamResult?.maskedImageBytes]);
+
+  // 翻訳画像URLの生成
+  const translatedImageUrl = useMemo(() => {
+    const translatedImageBytes = streamResult?.translatedImageBytes;
+    if (!translatedImageBytes) return "";
+    return `data:image/png;base64,${translatedImageBytes}`;
+  }, [streamResult?.translatedImageBytes]);
 
   // エラーの取得
   const error = useMemo(() => {
@@ -411,12 +435,68 @@ export default function Index() {
               </div>
             </div>
           ) : imageUrl ? (
-            <div className="flex flex-col items-center space-y-4">
+            <div className="flex flex-col items-center space-y-4 w-full">
+              {/* 画像タブUI */}
+              <div className="flex mb-4 border-b border-gray-200">
+                <button
+                  type="button"
+                  className={`py-2 px-4 font-medium text-lg ${
+                    activeImageTab === "original"
+                      ? "border-b-2 border-gray-800 text-gray-800"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                  onClick={() => setActiveImageTab("original")}
+                >
+                  オリジナル
+                </button>
+                {maskedImageUrl && (
+                  <button
+                    type="button"
+                    className={`py-2 px-4 font-medium text-lg ${
+                      activeImageTab === "masked"
+                        ? "border-b-2 border-gray-800 text-gray-800"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                    onClick={() => setActiveImageTab("masked")}
+                  >
+                    テキストマスク
+                  </button>
+                )}
+                {translatedImageUrl && (
+                  <button
+                    type="button"
+                    className={`py-2 px-4 font-medium text-lg ${
+                      activeImageTab === "translated"
+                        ? "border-b-2 border-gray-800 text-gray-800"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                    onClick={() => setActiveImageTab("translated")}
+                  >
+                    翻訳版
+                  </button>
+                )}
+              </div>
+
+              {/* 画像表示 */}
               <img
-                src={imageUrl}
-                alt="4コマ漫画"
+                src={
+                  activeImageTab === "original"
+                    ? imageUrl
+                    : activeImageTab === "masked"
+                      ? maskedImageUrl
+                      : translatedImageUrl
+                }
+                alt={
+                  activeImageTab === "original"
+                    ? "4コマ漫画"
+                    : activeImageTab === "masked"
+                      ? "テキストマスク画像"
+                      : "翻訳版画像"
+                }
                 className="max-h-80 object-contain"
               />
+
+              {/* ボタン群 */}
               <div className="flex gap-2">
                 {fetcher.data?.savedComic && (
                   <div className="px-4 py-2 bg-green-100 text-green-800 rounded-md border border-green-300">
@@ -424,8 +504,20 @@ export default function Index() {
                   </div>
                 )}
                 <a
-                  href={imageUrl}
-                  download="4comic-manga.png"
+                  href={
+                    activeImageTab === "original"
+                      ? imageUrl
+                      : activeImageTab === "masked"
+                        ? maskedImageUrl
+                        : translatedImageUrl
+                  }
+                  download={
+                    activeImageTab === "original"
+                      ? "4comic-manga.png"
+                      : activeImageTab === "masked"
+                        ? "4comic-manga-masked.png"
+                        : "4comic-manga-translated.png"
+                  }
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
                 >
                   <svg
@@ -442,7 +534,11 @@ export default function Index() {
                       d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                     />
                   </svg>
-                  画像をダウンロード
+                  {activeImageTab === "original"
+                    ? "画像をダウンロード"
+                    : activeImageTab === "masked"
+                      ? "マスク画像をダウンロード"
+                      : "翻訳版をダウンロード"}
                 </a>
               </div>
             </div>

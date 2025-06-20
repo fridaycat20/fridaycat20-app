@@ -2,6 +2,9 @@ import speech, { type protos } from "@google-cloud/speech";
 import { GoogleGenAI } from "@google/genai";
 import { saveComicToStorage } from "~/lib/firebase-admin";
 import { getVerifiedUser } from "~/lib/session-utils.server";
+import { visionService } from "~/services/vision.server";
+import { imageProcessingService } from "~/services/image-processing.server";
+import { translationService } from "~/services/translation.server";
 
 export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
@@ -101,6 +104,43 @@ export const action = async ({ request }: { request: Request }) => {
           // 画像があればBase64エンコードされたデータを返す
           const imageBytes = response2?.generatedImages?.[0]?.image?.imageBytes;
 
+          // OCR処理を実行
+          let ocrResult = null;
+          let maskedImageBytes = null;
+          let translatedImageBytes = null;
+          if (imageBytes) {
+            try {
+              sendEvent("status", "生成された画像を解析中...");
+              const imageBuffer = Buffer.from(imageBytes, 'base64');
+              ocrResult = await visionService.detectText(imageBuffer);
+              
+              // テキスト領域が検出された場合の処理
+              if (ocrResult && ocrResult.textAnnotations.length > 0) {
+                // 白塗り画像を生成
+                sendEvent("status", "テキスト領域を白塗り中...");
+                const maskResult = await imageProcessingService.whiteMaskTextRegions(imageBytes, ocrResult);
+                maskedImageBytes = maskResult.maskedImageBytes;
+                
+                // 英文を日本語に翻訳
+                sendEvent("status", "テキストを日本語に翻訳中...");
+                const originalTexts = ocrResult.textAnnotations.map(annotation => annotation.description);
+                const translationResult = await translationService.translateTexts(originalTexts);
+                
+                // 翻訳されたテキストを画像に描画
+                sendEvent("status", "翻訳テキストを画像に描画中...");
+                const translatedResult = await imageProcessingService.translateTextRegions(
+                  imageBytes, 
+                  ocrResult, 
+                  translationResult.translatedTexts
+                );
+                translatedImageBytes = translatedResult.translatedImageBytes;
+              }
+            } catch (error) {
+              console.error("OCR処理エラー:", error);
+              // OCRエラーでも画像は返す
+            }
+          }
+
           // ログインユーザーの場合は画像を自動保存
           let savedComic = null;
           if (userId && imageBytes) {
@@ -121,6 +161,9 @@ export const action = async ({ request }: { request: Request }) => {
             imageBytes: response2?.generatedImages?.[0]?.image?.imageBytes,
             generatedText: response.text,
             savedComic,
+            ocrResult,
+            maskedImageBytes,
+            translatedImageBytes,
           };
 
           console.log("Complete data:", completeData);
