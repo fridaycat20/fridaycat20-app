@@ -5,6 +5,7 @@ import { Logo } from "~/components/Logo";
 import { getVerifiedUser } from "~/lib/session-utils.server";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
+import { EventType, type LoadingStatus, ErrorMessage, ProcessingStatus } from "~/types/streaming";
 
 // タブの種類を定義
 type InputTab = "text" | "audio";
@@ -38,7 +39,7 @@ export default function Index() {
   // 画像表示タブの状態
   const [activeImageTab, setActiveImageTab] = useState<ImageTab>("original");
   // ローディングステータスの管理
-  const [loadingStatus, setLoadingStatus] = useState<string>("");
+  const [loadingStatus, setLoadingStatus] = useState<LoadingStatus>("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamResult, setStreamResult] = useState<{
     imageBytes?: string;
@@ -92,7 +93,7 @@ export default function Index() {
 
   // エラーの取得
   const error = useMemo(() => {
-    if (loadingStatus.includes("エラー")) {
+    if (typeof loadingStatus === "string" && loadingStatus.includes("エラー")) {
       return loadingStatus;
     }
     return "";
@@ -177,24 +178,22 @@ export default function Index() {
                 if (line.startsWith("data: ")) {
                   const data = line.slice(6);
 
-                  if (currentEvent === "status") {
+                  if (currentEvent === EventType.STATUS) {
                     setLoadingStatus(data);
-                  } else if (currentEvent === "complete") {
+                  } else if (currentEvent === EventType.COMPLETE) {
                     try {
-                      console.log("Received complete data:", data);
                       const result = JSON.parse(data);
-                      console.log("Parsed result:", result);
                       setStreamResult(result);
                       setIsStreaming(false);
                       setLoadingStatus("");
                     } catch (error) {
                       console.error("結果のパース中にエラー:", error);
                       console.error("Raw data:", data);
-                      setLoadingStatus("結果の処理中にエラーが発生しました。");
+                      setLoadingStatus(ErrorMessage.RESULT_PARSING_ERROR);
                       setIsStreaming(false);
                     }
-                  } else if (currentEvent === "error") {
-                    setLoadingStatus(data || "エラーが発生しました。");
+                  } else if (currentEvent === EventType.ERROR) {
+                    setLoadingStatus(data || ErrorMessage.GENERAL_ERROR);
                     setIsStreaming(false);
                   }
 
@@ -206,7 +205,7 @@ export default function Index() {
             })
             .catch((error) => {
               console.error("ストリーミング読み込みエラー:", error);
-              setLoadingStatus("接続エラーが発生しました。");
+              setLoadingStatus(ErrorMessage.CONNECTION_ERROR);
               setIsStreaming(false);
             });
         };
@@ -215,7 +214,7 @@ export default function Index() {
       })
       .catch((error) => {
         console.error("ストリーミング開始エラー:", error);
-        setLoadingStatus("接続エラーが発生しました。");
+        setLoadingStatus(ErrorMessage.CONNECTION_ERROR);
         setIsStreaming(false);
       });
   }, []);
@@ -230,14 +229,14 @@ export default function Index() {
       if (activeTab === "text") {
         const minutes = textareaRef.current?.value?.trim() || "";
         if (!minutes) {
-          setLoadingStatus("議事録を入力してください。");
+          setLoadingStatus(ErrorMessage.INPUT_REQUIRED);
           return;
         }
         formData.set("minutes", minutes);
       } else if (activeTab === "audio" && audioFile) {
         formData.set("audioFile", audioFile);
       } else {
-        setLoadingStatus("入力内容を確認してください。");
+        setLoadingStatus(ErrorMessage.VALIDATION_ERROR);
         return;
       }
 
@@ -394,7 +393,7 @@ export default function Index() {
               {/* ローディングメッセージ */}
               <div className="text-center">
                 <p className="text-gray-600 text-lg font-medium">
-                  {loadingStatus || "4コマ漫画を生成中..."}
+                  {loadingStatus || ProcessingStatus.GENERATING_COMIC}
                 </p>
                 <p className="text-gray-500 text-sm mt-1">
                   しばらくお待ちください
@@ -402,35 +401,17 @@ export default function Index() {
 
                 {/* 進捗インジケーター */}
                 <div className="mt-3 flex justify-center space-x-2">
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      activeTab === "audio" &&
-                      (
-                        loadingStatus.includes("音声") ||
-                          loadingStatus.includes("要約") ||
-                          loadingStatus.includes("生成")
-                      )
-                        ? "bg-gray-800"
-                        : activeTab === "audio"
-                          ? "bg-gray-300"
-                          : "hidden"
-                    }`}
-                  />
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      loadingStatus.includes("要約") ||
-                      loadingStatus.includes("生成")
-                        ? "bg-gray-800"
-                        : "bg-gray-300"
-                    }`}
-                  />
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      loadingStatus.includes("生成")
-                        ? "bg-gray-800"
-                        : "bg-gray-300"
-                    }`}
-                  />
+                  {Object.values(ProcessingStatus).map((status, index) => {
+                    const isActive = Object.values(ProcessingStatus).indexOf(loadingStatus as ProcessingStatus) >= index;
+                    return (
+                      <div
+                        key={status}
+                        className={`w-2 h-2 rounded-full ${
+                          isActive ? "bg-gray-800" : "bg-gray-300"
+                        }`}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             </div>

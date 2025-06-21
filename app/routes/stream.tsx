@@ -5,6 +5,7 @@ import { getVerifiedUser } from "~/lib/session-utils.server";
 import { visionService } from "~/services/vision.server";
 import { imageProcessingService } from "~/services/image-processing.server";
 import { translationService } from "~/services/translation.server";
+import { ProcessingStatus, EventType, ErrorMessage } from "~/types/streaming";
 
 export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
@@ -39,7 +40,7 @@ export const action = async ({ request }: { request: Request }) => {
 
           // 音声処理のステップ
           if (hasAudio && audioFile instanceof File) {
-            sendEvent("status", "音声を認識中...");
+            sendEvent(EventType.STATUS, ProcessingStatus.RECOGNIZING_SPEECH);
             try {
               // Google Cloud Speech クライアントを作成
               const client = new speech.SpeechClient();
@@ -70,13 +71,13 @@ export const action = async ({ request }: { request: Request }) => {
                 : "";
             } catch (error) {
               console.error("音声認識エラー:", error);
-              sendEvent("error", "音声認識に失敗しました。");
+              sendEvent(EventType.ERROR, ErrorMessage.SPEECH_RECOGNITION_FAILED);
               return;
             }
           }
 
           // テキスト生成のステップ
-          sendEvent("status", "内容を要約中...");
+          sendEvent(EventType.STATUS, ProcessingStatus.SUMMARIZING_CONTENT);
           const response = await ai.models.generateContent({
             model: "gemini-2.0-flash-001",
             contents: [
@@ -92,7 +93,7 @@ export const action = async ({ request }: { request: Request }) => {
           });
 
           // 画像生成のステップ
-          sendEvent("status", "4コマ漫画を生成中...");
+          sendEvent(EventType.STATUS, ProcessingStatus.GENERATING_COMIC);
           const response2 = await ai.models.generateImages({
             model: "imagen-4.0-generate-preview-05-20",
             prompt: `Please turn the following text into a 4-panel comic.：${response.text?.toString() ?? ""}`,
@@ -110,24 +111,24 @@ export const action = async ({ request }: { request: Request }) => {
           let translatedImageBytes = null;
           if (imageBytes) {
             try {
-              sendEvent("status", "生成された画像を解析中...");
+              sendEvent(EventType.STATUS, ProcessingStatus.ANALYZING_IMAGE);
               const imageBuffer = Buffer.from(imageBytes, 'base64');
               ocrResult = await visionService.detectText(imageBuffer);
               
               // テキスト領域が検出された場合の処理
               if (ocrResult && ocrResult.textAnnotations.length > 0) {
                 // 白塗り画像を生成
-                sendEvent("status", "テキスト領域を白塗り中...");
+                sendEvent(EventType.STATUS, ProcessingStatus.MASKING_TEXT);
                 const maskResult = await imageProcessingService.whiteMaskTextRegions(imageBytes, ocrResult);
                 maskedImageBytes = maskResult.maskedImageBytes;
                 
                 // 英文を日本語に翻訳
-                sendEvent("status", "テキストを日本語に翻訳中...");
+                sendEvent(EventType.STATUS, ProcessingStatus.TRANSLATING_TEXT);
                 const originalTexts = ocrResult.textAnnotations.map(annotation => annotation.description);
                 const translationResult = await translationService.translateTexts(originalTexts);
                 
                 // 翻訳されたテキストを画像に描画
-                sendEvent("status", "翻訳テキストを画像に描画中...");
+                sendEvent(EventType.STATUS, ProcessingStatus.DRAWING_TEXT);
                 const translatedResult = await imageProcessingService.translateTextRegions(
                   imageBytes, 
                   ocrResult, 
@@ -166,12 +167,10 @@ export const action = async ({ request }: { request: Request }) => {
             translatedImageBytes,
           };
 
-          console.log("Complete data:", completeData);
-
-          sendEvent("complete", JSON.stringify(completeData));
+          sendEvent(EventType.COMPLETE, JSON.stringify(completeData));
         } catch (error) {
           console.error("ストリーミング処理中にエラー:", error);
-          sendEvent("error", "処理中にエラーが発生しました。");
+          sendEvent(EventType.ERROR, ErrorMessage.PROCESSING_ERROR);
         } finally {
           controller.close();
         }

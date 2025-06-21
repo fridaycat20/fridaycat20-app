@@ -9,7 +9,6 @@
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc",
     "lint": "biome lint --write",
-    "lint2": "biome lint app/ --write",
     "format": "biome format --write",
     "check": "biome check --write"
   },
