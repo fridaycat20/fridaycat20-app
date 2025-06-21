@@ -2,6 +2,10 @@ import speech, { type protos } from "@google-cloud/speech";
 import { GoogleGenAI } from "@google/genai";
 import { saveComicToStorage } from "~/lib/firebase-admin";
 import { getVerifiedUser } from "~/lib/session-utils.server";
+import { imageProcessingService } from "~/services/image-processing.server";
+import { translationService } from "~/services/translation.server";
+import { visionService } from "~/services/vision.server";
+import { ErrorMessage, EventType, ProcessingStatus } from "~/types/streaming";
 
 export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
@@ -36,7 +40,7 @@ export const action = async ({ request }: { request: Request }) => {
 
           // 音声処理のステップ
           if (hasAudio && audioFile instanceof File) {
-            sendEvent("status", "音声を認識中...");
+            sendEvent(EventType.STATUS, ProcessingStatus.RECOGNIZING_SPEECH);
             try {
               // Google Cloud Speech クライアントを作成
               const client = new speech.SpeechClient();
@@ -67,13 +71,16 @@ export const action = async ({ request }: { request: Request }) => {
                 : "";
             } catch (error) {
               console.error("音声認識エラー:", error);
-              sendEvent("error", "音声認識に失敗しました。");
+              sendEvent(
+                EventType.ERROR,
+                ErrorMessage.SPEECH_RECOGNITION_FAILED,
+              );
               return;
             }
           }
 
           // テキスト生成のステップ
-          sendEvent("status", "内容を要約中...");
+          sendEvent(EventType.STATUS, ProcessingStatus.SUMMARIZING_CONTENT);
           const response = await ai.models.generateContent({
             model: "gemini-2.0-flash-001",
             contents: [
@@ -84,15 +91,16 @@ export const action = async ({ request }: { request: Request }) => {
             ],
             config: {
               systemInstruction:
-                "あなたは優秀な4コマ漫画のストーリーライターです。入力された内容を元に4コマ漫画を意識して起承転結にまとめることが得意です。出力は英語にしてください。",
+                'You are an expert 4-panel comic story writer. Create a 4-panel comic story from the input content with proper structure (introduction, development, climax, conclusion). Include specific dialogue in English, character actions, and scene descriptions for each panel. All dialogue must be in English. Format your output as: Panel 1: [scene description] Character: "English dialogue", Panel 2: [scene description] Character: "English dialogue", Panel 3: [scene description] Character: "English dialogue", Panel 4: [scene description] Character: "English dialogue". Make it engaging and visual for comic illustration.',
             },
           });
 
           // 画像生成のステップ
-          sendEvent("status", "4コマ漫画を生成中...");
+          sendEvent(EventType.STATUS, ProcessingStatus.GENERATING_COMIC);
           const response2 = await ai.models.generateImages({
-            model: "imagen-4.0-generate-preview-05-20",
-            prompt: `Please turn the following text into a 4-panel comic.：${response.text?.toString() ?? ""}`,
+            // model: "imagen-4.0-generate-preview-05-20",
+            model: "imagen-4.0-ultra-generate-preview-06-06",
+            prompt: `Create a 4-panel comic strip with large white speech bubbles containing text with generous padding. Make sure all dialogue and text appear inside prominent white speech bubbles with black borders, with plenty of white space around the text for easy replacement. Each speech bubble should be oversized with ample margins around the text content. The comic should be based on: ${response.text?.toString() ?? ""}. Style: Clean manga/comic style with bold outlines, clear panel divisions, and spacious well-defined white speech bubbles with generous internal padding.`,
             config: {
               numberOfImages: 1,
             },
@@ -100,6 +108,51 @@ export const action = async ({ request }: { request: Request }) => {
 
           // 画像があればBase64エンコードされたデータを返す
           const imageBytes = response2?.generatedImages?.[0]?.image?.imageBytes;
+
+          // OCR処理を実行
+          let ocrResult = null;
+          let maskedImageBytes = null;
+          let translatedImageBytes = null;
+          if (imageBytes) {
+            try {
+              sendEvent(EventType.STATUS, ProcessingStatus.ANALYZING_IMAGE);
+              const imageBuffer = Buffer.from(imageBytes, "base64");
+              ocrResult = await visionService.detectText(imageBuffer);
+
+              // テキスト領域が検出された場合の処理
+              if (ocrResult && ocrResult.textAnnotations.length > 0) {
+                // 白塗り画像を生成
+                sendEvent(EventType.STATUS, ProcessingStatus.MASKING_TEXT);
+                const maskResult =
+                  await imageProcessingService.whiteMaskTextRegions(
+                    imageBytes,
+                    ocrResult,
+                  );
+                maskedImageBytes = maskResult.maskedImageBytes;
+
+                // 英文を日本語に翻訳
+                sendEvent(EventType.STATUS, ProcessingStatus.TRANSLATING_TEXT);
+                const originalTexts = ocrResult.textAnnotations.map(
+                  (annotation) => annotation.description,
+                );
+                const translationResult =
+                  await translationService.translateTexts(originalTexts);
+
+                // 翻訳されたテキストを画像に描画
+                sendEvent(EventType.STATUS, ProcessingStatus.DRAWING_TEXT);
+                const translatedResult =
+                  await imageProcessingService.translateTextRegions(
+                    imageBytes,
+                    ocrResult,
+                    translationResult.translatedTexts,
+                  );
+                translatedImageBytes = translatedResult.translatedImageBytes;
+              }
+            } catch (error) {
+              console.error("OCR処理エラー:", error);
+              // OCRエラーでも画像は返す
+            }
+          }
 
           // ログインユーザーの場合は画像を自動保存
           let savedComic = null;
@@ -121,14 +174,15 @@ export const action = async ({ request }: { request: Request }) => {
             imageBytes: response2?.generatedImages?.[0]?.image?.imageBytes,
             generatedText: response.text,
             savedComic,
+            ocrResult,
+            maskedImageBytes,
+            translatedImageBytes,
           };
 
-          console.log("Complete data:", completeData);
-
-          sendEvent("complete", JSON.stringify(completeData));
+          sendEvent(EventType.COMPLETE, JSON.stringify(completeData));
         } catch (error) {
           console.error("ストリーミング処理中にエラー:", error);
-          sendEvent("error", "処理中にエラーが発生しました。");
+          sendEvent(EventType.ERROR, ErrorMessage.PROCESSING_ERROR);
         } finally {
           controller.close();
         }

@@ -1,20 +1,15 @@
-import speech, { type protos } from "@google-cloud/speech";
-import { GoogleGenAI } from "@google/genai";
 import { useCallback, useMemo, useRef, useState } from "react";
-import type {
-  ActionFunctionArgs,
-  LoaderFunctionArgs,
-  MetaFunction,
-} from "react-router";
+import type { LoaderFunctionArgs, MetaFunction } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { Logo } from "~/components/Logo";
-import { saveComicToStorage } from "~/lib/firebase-admin";
 import { getVerifiedUser } from "~/lib/session-utils.server";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
+import { EventType, type LoadingStatus, ErrorMessage, ProcessingStatus } from "~/types/streaming";
 
 // タブの種類を定義
 type InputTab = "text" | "audio";
+type ImageTab = "original" | "masked" | "translated";
 
 export const meta: MetaFunction = () => {
   return [
@@ -41,12 +36,28 @@ export default function Index() {
   // 現在選択中のタブを管理する状態
   const [activeTab, setActiveTab] = useState<InputTab>("text");
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  // 画像表示タブの状態
+  const [activeImageTab, setActiveImageTab] = useState<ImageTab>("original");
   // ローディングステータスの管理
-  const [loadingStatus, setLoadingStatus] = useState<string>("");
+  const [loadingStatus, setLoadingStatus] = useState<LoadingStatus>("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamResult, setStreamResult] = useState<{
     imageBytes?: string;
     generatedText?: string;
+    maskedImageBytes?: string;
+    translatedImageBytes?: string;
+    ocrResult?: {
+      fullText: string;
+      textAnnotations: Array<{
+        description: string;
+        boundingPoly: {
+          vertices: Array<{
+            x: number;
+            y: number;
+          }>;
+        };
+      }>;
+    };
   } | null>(null);
 
   // 音声ファイルが選択されたときのハンドラ
@@ -66,9 +77,23 @@ export default function Index() {
     return `data:image/png;base64,${imageBytes}`;
   }, [streamResult?.imageBytes]);
 
+  // マスク画像URLの生成
+  const maskedImageUrl = useMemo(() => {
+    const maskedImageBytes = streamResult?.maskedImageBytes;
+    if (!maskedImageBytes) return "";
+    return `data:image/png;base64,${maskedImageBytes}`;
+  }, [streamResult?.maskedImageBytes]);
+
+  // 翻訳画像URLの生成
+  const translatedImageUrl = useMemo(() => {
+    const translatedImageBytes = streamResult?.translatedImageBytes;
+    if (!translatedImageBytes) return "";
+    return `data:image/png;base64,${translatedImageBytes}`;
+  }, [streamResult?.translatedImageBytes]);
+
   // エラーの取得
   const error = useMemo(() => {
-    if (loadingStatus.includes("エラー")) {
+    if (typeof loadingStatus === "string" && loadingStatus.includes("エラー")) {
       return loadingStatus;
     }
     return "";
@@ -153,24 +178,22 @@ export default function Index() {
                 if (line.startsWith("data: ")) {
                   const data = line.slice(6);
 
-                  if (currentEvent === "status") {
+                  if (currentEvent === EventType.STATUS) {
                     setLoadingStatus(data);
-                  } else if (currentEvent === "complete") {
+                  } else if (currentEvent === EventType.COMPLETE) {
                     try {
-                      console.log("Received complete data:", data);
                       const result = JSON.parse(data);
-                      console.log("Parsed result:", result);
                       setStreamResult(result);
                       setIsStreaming(false);
                       setLoadingStatus("");
                     } catch (error) {
                       console.error("結果のパース中にエラー:", error);
                       console.error("Raw data:", data);
-                      setLoadingStatus("結果の処理中にエラーが発生しました。");
+                      setLoadingStatus(ErrorMessage.RESULT_PARSING_ERROR);
                       setIsStreaming(false);
                     }
-                  } else if (currentEvent === "error") {
-                    setLoadingStatus(data || "エラーが発生しました。");
+                  } else if (currentEvent === EventType.ERROR) {
+                    setLoadingStatus(data || ErrorMessage.GENERAL_ERROR);
                     setIsStreaming(false);
                   }
 
@@ -182,7 +205,7 @@ export default function Index() {
             })
             .catch((error) => {
               console.error("ストリーミング読み込みエラー:", error);
-              setLoadingStatus("接続エラーが発生しました。");
+              setLoadingStatus(ErrorMessage.CONNECTION_ERROR);
               setIsStreaming(false);
             });
         };
@@ -191,7 +214,7 @@ export default function Index() {
       })
       .catch((error) => {
         console.error("ストリーミング開始エラー:", error);
-        setLoadingStatus("接続エラーが発生しました。");
+        setLoadingStatus(ErrorMessage.CONNECTION_ERROR);
         setIsStreaming(false);
       });
   }, []);
@@ -206,14 +229,14 @@ export default function Index() {
       if (activeTab === "text") {
         const minutes = textareaRef.current?.value?.trim() || "";
         if (!minutes) {
-          setLoadingStatus("議事録を入力してください。");
+          setLoadingStatus(ErrorMessage.INPUT_REQUIRED);
           return;
         }
         formData.set("minutes", minutes);
       } else if (activeTab === "audio" && audioFile) {
         formData.set("audioFile", audioFile);
       } else {
-        setLoadingStatus("入力内容を確認してください。");
+        setLoadingStatus(ErrorMessage.VALIDATION_ERROR);
         return;
       }
 
@@ -370,7 +393,7 @@ export default function Index() {
               {/* ローディングメッセージ */}
               <div className="text-center">
                 <p className="text-gray-600 text-lg font-medium">
-                  {loadingStatus || "4コマ漫画を生成中..."}
+                  {loadingStatus || ProcessingStatus.GENERATING_COMIC}
                 </p>
                 <p className="text-gray-500 text-sm mt-1">
                   しばらくお待ちください
@@ -378,45 +401,83 @@ export default function Index() {
 
                 {/* 進捗インジケーター */}
                 <div className="mt-3 flex justify-center space-x-2">
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      activeTab === "audio" &&
-                      (
-                        loadingStatus.includes("音声") ||
-                          loadingStatus.includes("要約") ||
-                          loadingStatus.includes("生成")
-                      )
-                        ? "bg-gray-800"
-                        : activeTab === "audio"
-                          ? "bg-gray-300"
-                          : "hidden"
-                    }`}
-                  />
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      loadingStatus.includes("要約") ||
-                      loadingStatus.includes("生成")
-                        ? "bg-gray-800"
-                        : "bg-gray-300"
-                    }`}
-                  />
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      loadingStatus.includes("生成")
-                        ? "bg-gray-800"
-                        : "bg-gray-300"
-                    }`}
-                  />
+                  {Object.values(ProcessingStatus).map((status, index) => {
+                    const isActive = Object.values(ProcessingStatus).indexOf(loadingStatus as ProcessingStatus) >= index;
+                    return (
+                      <div
+                        key={status}
+                        className={`w-2 h-2 rounded-full ${
+                          isActive ? "bg-gray-800" : "bg-gray-300"
+                        }`}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             </div>
           ) : imageUrl ? (
-            <div className="flex flex-col items-center space-y-4">
+            <div className="flex flex-col items-center space-y-4 w-full">
+              {/* 画像タブUI */}
+              <div className="flex mb-4 border-b border-gray-200">
+                <button
+                  type="button"
+                  className={`py-2 px-4 font-medium text-lg ${
+                    activeImageTab === "original"
+                      ? "border-b-2 border-gray-800 text-gray-800"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                  onClick={() => setActiveImageTab("original")}
+                >
+                  オリジナル
+                </button>
+                {maskedImageUrl && (
+                  <button
+                    type="button"
+                    className={`py-2 px-4 font-medium text-lg ${
+                      activeImageTab === "masked"
+                        ? "border-b-2 border-gray-800 text-gray-800"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                    onClick={() => setActiveImageTab("masked")}
+                  >
+                    テキストマスク
+                  </button>
+                )}
+                {translatedImageUrl && (
+                  <button
+                    type="button"
+                    className={`py-2 px-4 font-medium text-lg ${
+                      activeImageTab === "translated"
+                        ? "border-b-2 border-gray-800 text-gray-800"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                    onClick={() => setActiveImageTab("translated")}
+                  >
+                    翻訳版
+                  </button>
+                )}
+              </div>
+
+              {/* 画像表示 */}
               <img
-                src={imageUrl}
-                alt="4コマ漫画"
+                src={
+                  activeImageTab === "original"
+                    ? imageUrl
+                    : activeImageTab === "masked"
+                      ? maskedImageUrl
+                      : translatedImageUrl
+                }
+                alt={
+                  activeImageTab === "original"
+                    ? "4コマ漫画"
+                    : activeImageTab === "masked"
+                      ? "テキストマスク画像"
+                      : "翻訳版画像"
+                }
                 className="max-h-80 object-contain"
               />
+
+              {/* ボタン群 */}
               <div className="flex gap-2">
                 {fetcher.data?.savedComic && (
                   <div className="px-4 py-2 bg-green-100 text-green-800 rounded-md border border-green-300">
@@ -424,8 +485,20 @@ export default function Index() {
                   </div>
                 )}
                 <a
-                  href={imageUrl}
-                  download="4comic-manga.png"
+                  href={
+                    activeImageTab === "original"
+                      ? imageUrl
+                      : activeImageTab === "masked"
+                        ? maskedImageUrl
+                        : translatedImageUrl
+                  }
+                  download={
+                    activeImageTab === "original"
+                      ? "4comic-manga.png"
+                      : activeImageTab === "masked"
+                        ? "4comic-manga-masked.png"
+                        : "4comic-manga-translated.png"
+                  }
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
                 >
                   <svg
@@ -442,7 +515,11 @@ export default function Index() {
                       d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                     />
                   </svg>
-                  画像をダウンロード
+                  {activeImageTab === "original"
+                    ? "画像をダウンロード"
+                    : activeImageTab === "masked"
+                      ? "マスク画像をダウンロード"
+                      : "翻訳版をダウンロード"}
                 </a>
               </div>
             </div>

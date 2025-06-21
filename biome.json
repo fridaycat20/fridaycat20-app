@@ -7,7 +7,18 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "ignore": [".react-router"]
+    "ignore": [
+      ".react-router",
+      "node_modules",
+      "build",
+      "dist",
+      "coverage",
+      ".cache",
+      ".next",
+      ".vercel",
+      ".firebase",
+      ".firebase-debug.log"
+    ]
   },
   "formatter": {
     "enabled": true,
