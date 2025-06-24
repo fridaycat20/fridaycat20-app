@@ -29,7 +29,8 @@ export async function getVerifiedUser(
       }
       return verifiedUser;
     } catch (error) {
-      console.error("Session verification failed:", error);
+      console.error("Session cookie verification failed:", error);
+      // セッションクッキーが期限切れの場合はnullを返す（自動ログアウト）
       return null;
     }
   }
@@ -41,12 +42,40 @@ export async function getVerifiedUser(
 export async function requireAuth(request: Request): Promise<VerifiedUser> {
   const user = await getVerifiedUser(request);
   if (!user) {
+    // セッションが無効な場合はクッキーをクリアしてログインページにリダイレクト
+    const session = await sessionStorage.getSession(
+      request.headers.get("Cookie"),
+    );
+    
     throw new Response(null, {
       status: 302,
       headers: {
         Location: "/login",
+        "Set-Cookie": await sessionStorage.destroySession(session),
       },
     });
   }
   return user;
+}
+
+export async function clearExpiredSession(request: Request): Promise<Headers | null> {
+  const session = await sessionStorage.getSession(
+    request.headers.get("Cookie"),
+  );
+  const user = session.get("user") as User | null;
+
+  if (user?.sessionCookie) {
+    try {
+      await verifySessionCookie(user.sessionCookie);
+      return null; // セッションは有効
+    } catch (error) {
+      console.error("Clearing expired session:", error);
+      // セッションクッキーが期限切れの場合はセッションをクリア
+      const headers = new Headers();
+      headers.set("Set-Cookie", await sessionStorage.destroySession(session));
+      return headers;
+    }
+  }
+  
+  return null; // セッションクッキーがない場合は何もしない
 }

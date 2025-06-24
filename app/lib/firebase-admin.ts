@@ -23,13 +23,32 @@ export async function verifySessionCookie(
   try {
     const decodedClaims = await adminAuth.verifySessionCookie(
       sessionCookie,
-      true,
+      true, // checkRevoked = true
     );
     return {
       id: decodedClaims.uid,
       email: decodedClaims.email || "",
     };
-  } catch (error) {
+  } catch (error: unknown) {
+    // Firebase認証エラーの型ガード
+    const isFirebaseError = (err: unknown): err is { code: string; message: string } => {
+      return typeof err === 'object' && err !== null && 'code' in err && 'message' in err;
+    };
+
+    // セッション期限切れや無効なセッションの場合は静かに失敗
+    if (isFirebaseError(error) && (
+        error.code === 'auth/session-cookie-expired' || 
+        error.code === 'auth/session-cookie-revoked' ||
+        error.code === 'auth/id-token-expired'
+    )) {
+      // セッション期限切れは正常な動作なので、デバッグレベルのログのみ
+      if (process.env.NODE_ENV === 'development') {
+        console.log("Session cookie expired or revoked:", error.code);
+      }
+      return null;
+    }
+    
+    // その他のエラーはログに記録
     console.error("Session cookie verification failed:", error);
     return null;
   }
