@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
-import { getUserComics, type ComicMetadata } from "~/services/storageService";
+import { getUserComics, type ComicMetadata } from "~/lib/firebase-admin";
 import { Logo } from "~/components/Logo";
 import { requireAuth } from "~/lib/session-utils.server";
 

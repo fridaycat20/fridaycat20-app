@@ -103,3 +103,38 @@ export async function saveComicToStorage(
     userId,
   };
 }
+
+export async function getUserComics(userId: string): Promise<ComicMetadata[]> {
+  try {
+    const bucket = adminStorage.bucket();
+    const [files] = await bucket.getFiles({
+      prefix: `users/${userId}/comics/`,
+    });
+
+    const comics: ComicMetadata[] = [];
+
+    for (const file of files) {
+      if (file.name.endsWith('.png')) {
+        const [metadata] = await file.getMetadata();
+        const downloadURL = `https://storage.googleapis.com/${bucket.name}/${file.name}`;
+
+        comics.push({
+          id: String(metadata.metadata?.comicId || file.name.split('/').pop()?.replace('.png', '') || ''),
+          createdAt: String(metadata.metadata?.createdAt || metadata.timeCreated || new Date().toISOString()),
+          prompt: String(metadata.metadata?.prompt || ''),
+          downloadURL,
+          fileName: file.name.split('/').pop() || '',
+          userId,
+        });
+      }
+    }
+
+    // Sort by creation date (newest first)
+    return comics.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  } catch (error) {
+    console.error('Error fetching user comics:', error);
+    return [];
+  }
+}
