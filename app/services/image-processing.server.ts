@@ -1,6 +1,20 @@
 import { createCanvas, loadImage, type CanvasRenderingContext2D } from 'canvas';
 import type { OCRResult } from './vision.server';
 
+// フォントのフォールバック順序
+const FONT_STACK = [
+  'system-ui',
+  '-apple-system',
+  'BlinkMacSystemFont',
+  'Segoe UI',
+  'DejaVu Sans',
+  'Arial',
+  'Hiragino Sans',
+  'Yu Gothic',
+  'Meiryo',
+  'sans-serif'
+].join(', ');
+
 export interface WhiteMaskResult {
   maskedImageBytes: string; // Base64 encoded image
 }
@@ -10,6 +24,46 @@ export interface TranslatedImageResult {
 }
 
 export class ImageProcessingService {
+  private static fontInitialized = false;
+
+  // 日本語フォントが利用可能かチェック・初期化
+  private static initializeFonts() {
+    if (ImageProcessingService.fontInitialized) return;
+
+    try {
+      // 本番環境（Cloud Run）用のフォント検証とフォールバック
+      const canvas = createCanvas(100, 100);
+      const ctx = canvas.getContext('2d');
+      
+      // フォントテスト: 日本語文字が正しく表示されるかチェック
+      ctx.font = `16px ${FONT_STACK}`;
+      const testText = 'あいうえお';
+      const metrics = ctx.measureText(testText);
+      
+      // 日本語文字の幅が0でない場合、フォントが機能している
+      if (metrics.width > 0) {
+        console.log('Japanese font support detected');
+      } else {
+        console.warn('Japanese font support may be limited - using fallback rendering');
+      }
+      
+      // Cloud Run環境での追加ログ
+      console.log('Font stack:', FONT_STACK);
+      console.log('Test text metrics:', { width: metrics.width, actualBoundingBoxLeft: metrics.actualBoundingBoxLeft });
+      
+      // 環境情報を出力（Cloud Run診断用）
+      console.log('Environment info:', {
+        platform: process.platform,
+        nodeVersion: process.version,
+        environment: process.env.NODE_ENV || 'development'
+      });
+      
+      ImageProcessingService.fontInitialized = true;
+    } catch (error) {
+      console.warn('Font initialization failed:', error);
+      ImageProcessingService.fontInitialized = true; // エラーでも初期化済みとマーク
+    }
+  }
   
   // テキストを領域内に収まるように調整する
   private fitTextInBounds(
@@ -23,7 +77,12 @@ export class ImageProcessingService {
     
     // 最適なフォントサイズを見つける
     while (fontSize > 6) {
-      ctx.font = `${fontSize}px Arial, "Noto Sans CJK JP", sans-serif`;
+      try {
+        ctx.font = `${fontSize}px ${FONT_STACK}`;
+      } catch (fontError) {
+        console.warn('Font setting failed in fitTextInBounds, using fallback:', fontError);
+        ctx.font = `${fontSize}px sans-serif`;
+      }
       
       // 日本語と英語の混在テキストを適切に分割
       const chars = text.split('');
@@ -102,6 +161,8 @@ export class ImageProcessingService {
 
   async whiteMaskTextRegions(imageBytes: string, ocrResult: OCRResult): Promise<WhiteMaskResult> {
     try {
+      // フォントを初期化
+      ImageProcessingService.initializeFonts();
       // Base64画像をBufferに変換
       const imageBuffer = Buffer.from(imageBytes, 'base64');
       
@@ -163,6 +224,8 @@ export class ImageProcessingService {
     translatedTexts: string[]
   ): Promise<TranslatedImageResult> {
     try {
+      // フォントを初期化
+      ImageProcessingService.initializeFonts();
       // Base64画像をBufferに変換
       const imageBuffer = Buffer.from(imageBytes, 'base64');
       
@@ -211,7 +274,13 @@ export class ImageProcessingService {
           ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
           
           // 統一フォントサイズでテキストを分割
-          ctx.font = `${uniformFontSize}px Arial, "Noto Sans CJK JP", sans-serif`;
+          try {
+            ctx.font = `${uniformFontSize}px ${FONT_STACK}`;
+          } catch (fontError) {
+            console.warn('Font setting failed, using fallback:', fontError);
+            ctx.font = `${uniformFontSize}px sans-serif`;
+          }
+          
           const lines = this.splitTextIntoLines(ctx, translatedText, bounds.width * 0.85);
           
           // 日本語テキストを描画
