@@ -1,8 +1,8 @@
-import Uppy from "@uppy/core";
+import Uppy, { type UppyFile, type Meta, type Body } from "@uppy/core";
 import DragDrop from "@uppy/drag-drop";
 import Japanese from "@uppy/locales/lib/ja_JP";
-import { Dashboard, useUppyEvent } from "@uppy/react";
-import { useState } from "react";
+import { Dashboard } from "@uppy/react";
+import { useState, useEffect } from "react";
 import "@uppy/dashboard/dist/style.css";
 
 interface FileUploaderProps {
@@ -10,9 +10,14 @@ interface FileUploaderProps {
 }
 
 export function FileUploader({ onTextLoaded }: FileUploaderProps) {
-  if (typeof window === "undefined") return <></>;
-  const [uppy] = useState(() =>
-    new Uppy({
+  const [isClient, setIsClient] = useState(false);
+  const [uppy, setUppy] = useState<Uppy | null>(null);
+
+  useEffect(() => {
+    setIsClient(true);
+    
+    // クライアントサイドでのみUppyを初期化
+    const uppyInstance = new Uppy({
       restrictions: { maxNumberOfFiles: 1, allowedFileTypes: [".txt"] },
       locale: {
         strings: {
@@ -22,14 +27,51 @@ export function FileUploader({ onTextLoaded }: FileUploaderProps) {
         },
         pluralize: Japanese.pluralize,
       },
-    }).use(DragDrop, {}),
-  );
+    }).use(DragDrop, {});
+    
+    setUppy(uppyInstance);
 
-  useUppyEvent(uppy, "file-added", async (file) => {
-    const text = await file.data.text();
-    onTextLoaded(text);
-    uppy.removeFile(file.id);
-  });
+    // クリーンアップ
+    return () => {
+      uppyInstance.destroy();
+    };
+  }, []);
+
+  // Uppyイベントハンドリング（uppyがnullでない場合のみ）
+  useEffect(() => {
+    if (!uppy) return;
+
+    const handleFileAdded = async (file: UppyFile<Meta, Body>) => {
+      const text = await file.data.text();
+      onTextLoaded(text);
+      uppy.removeFile(file.id);
+    };
+
+    uppy.on("file-added", handleFileAdded);
+
+    return () => {
+      uppy.off("file-added", handleFileAdded);
+    };
+  }, [uppy, onTextLoaded]);
+
+  // クライアントサイドでのみレンダリング
+  if (!isClient || !uppy) {
+    return (
+      <div className="file-uploader-container">
+        <div style={{ 
+          height: 200, 
+          border: '2px dashed #ccc', 
+          borderRadius: '8px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#666'
+        }}>
+          ファイルアップローダーを読み込み中...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="file-uploader-container">
