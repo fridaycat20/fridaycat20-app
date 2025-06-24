@@ -3,6 +3,7 @@ import type { LoaderFunctionArgs, MetaFunction } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { Logo } from "~/components/Logo";
 import { getVerifiedUser } from "~/lib/session-utils.server";
+import { sessionStorage } from "~/lib/session.server";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
 import { EventType, type LoadingStatus, ErrorMessage, ProcessingStatus } from "~/types/streaming";
@@ -24,6 +25,26 @@ export const meta: MetaFunction = () => {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const user = await getVerifiedUser(request);
+  
+  // セッションが期限切れの場合はログインページにリダイレクト
+  if (!user) {
+    const session = await sessionStorage.getSession(
+      request.headers.get("Cookie"),
+    );
+    const storedUser = session.get("user");
+    
+    // セッションにユーザーがいたが検証に失敗した場合（期限切れ）
+    if (storedUser) {
+      throw new Response(null, {
+        status: 302,
+        headers: {
+          Location: "/login",
+          "Set-Cookie": await sessionStorage.destroySession(session),
+        },
+      });
+    }
+  }
+  
   return { user };
 };
 
