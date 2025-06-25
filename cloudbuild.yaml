@@ -4,6 +4,7 @@ steps:
       apt-get update
       apt-get install -y fonts-noto-cjk fontconfig
       fc-cache -fv
+      find /usr/share/fonts -name "*Noto*CJK*" -type f | head -10
     id: Install-Fonts
   - name: gcr.io/k8s-skaffold/pack
     args:
