@@ -1,20 +1,12 @@
 steps:
   - name: gcr.io/cloud-builders/docker
-    script: |
-      apt-get update
-      apt-get install -y fonts-noto-cjk fontconfig
-      fc-cache -fv
-      find /usr/share/fonts -name "*Noto*CJK*" -type f | head -10
-    id: Install-Fonts
-  - name: gcr.io/k8s-skaffold/pack
     args:
       - build
+      - -t
       - >-
         $_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
-      - "--builder=gcr.io/buildpacks/builder:latest"
-      - "--network=cloudbuild"
-    id: Buildpack
-    entrypoint: pack
+      - .
+    id: Build
   - name: gcr.io/cloud-builders/docker
     args:
       - push

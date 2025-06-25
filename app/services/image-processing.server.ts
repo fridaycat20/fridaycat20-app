@@ -42,8 +42,10 @@ export class ImageProcessingService {
       // Noto Sans CJKフォントを明示的に登録
       const fontPaths = [
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 
         "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-JP-Regular.otf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-JP-Regular.otf",
       ];
 
       let fontRegistered = false;
