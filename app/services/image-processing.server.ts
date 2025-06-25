@@ -1,4 +1,10 @@
-import { type CanvasRenderingContext2D, createCanvas, loadImage } from "canvas";
+import { existsSync } from "node:fs";
+import {
+  type CanvasRenderingContext2D,
+  createCanvas,
+  loadImage,
+  registerFont,
+} from "canvas";
 import type { OCRResult } from "./vision.server";
 
 // フォントのフォールバック順序
@@ -33,6 +39,31 @@ export class ImageProcessingService {
     if (ImageProcessingService.fontInitialized) return;
 
     try {
+      // Noto Sans CJKフォントを明示的に登録
+      const fontPaths = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+      ];
+
+      let fontRegistered = false;
+      for (const fontPath of fontPaths) {
+        if (existsSync(fontPath)) {
+          try {
+            registerFont(fontPath, { family: "Noto Sans CJK JP" });
+            console.log(`Successfully registered font: ${fontPath}`);
+            fontRegistered = true;
+            break;
+          } catch (error) {
+            console.warn(`Failed to register font ${fontPath}:`, error);
+          }
+        }
+      }
+
+      if (!fontRegistered) {
+        console.warn("Noto Sans CJK font not found in expected locations");
+      }
+
       // 本番環境（Cloud Run）用のフォント検証とフォールバック
       const canvas = createCanvas(100, 100);
       const ctx = canvas.getContext("2d");
