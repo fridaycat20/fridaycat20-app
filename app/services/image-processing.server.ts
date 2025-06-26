@@ -44,7 +44,7 @@ export class ImageProcessingService {
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-JP-Regular.otf",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-JP-Regular.otf",
       ];
@@ -171,39 +171,6 @@ export class ImageProcessingService {
     return { fontSize, lines };
   }
 
-  // 統一フォントサイズでテキストを行に分割する
-  private splitTextIntoLines(
-    ctx: CanvasRenderingContext2D,
-    text: string,
-    maxWidth: number,
-  ): string[] {
-    const chars = text.split("");
-    const lines: string[] = [];
-    let currentLine = "";
-
-    for (const char of chars) {
-      const testLine = currentLine + char;
-      const metrics = ctx.measureText(testLine);
-
-      if (metrics.width <= maxWidth) {
-        currentLine = testLine;
-      } else {
-        if (currentLine) {
-          lines.push(currentLine);
-          currentLine = char;
-        } else {
-          lines.push(char);
-          currentLine = "";
-        }
-      }
-    }
-
-    if (currentLine) {
-      lines.push(currentLine);
-    }
-
-    return lines;
-  }
 
   async whiteMaskTextRegions(
     imageBytes: string,
@@ -292,11 +259,7 @@ export class ImageProcessingService {
       // 元の画像を描画
       ctx.drawImage(image, 0, 0);
 
-      // 統一フォントサイズを決定（画像サイズに基づく）
-      const uniformFontSize = Math.max(
-        48,
-        Math.min(96, Math.floor(Math.min(image.width, image.height) / 10)),
-      );
+      // 各テキスト領域で最適なフォントサイズを計算するため、統一フォントサイズは使用しない
 
       // 各テキスト領域を処理
       for (
@@ -337,29 +300,34 @@ export class ImageProcessingService {
           ctx.fillStyle = "white";
           ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
 
-          // 統一フォントサイズでテキストを分割
-          try {
-            ctx.font = `${uniformFontSize}px ${FONT_STACK}`;
-          } catch (fontError) {
-            console.warn("Font setting failed, using fallback:", fontError);
-            ctx.font = `${uniformFontSize}px sans-serif`;
-          }
-
-          const lines = this.splitTextIntoLines(
+          // 翻訳テキストの文字数とマスク領域に基づいて最適なフォントサイズを計算
+          const { fontSize, lines } = this.fitTextInBounds(
             ctx,
             translatedText,
-            bounds.width * 0.85,
+            bounds,
+            Math.min(bounds.width / 3, bounds.height / 2), // 最大フォントサイズを領域サイズに応じて制限
           );
+
+          // フォントを設定
+          try {
+            ctx.font = `${fontSize}px ${FONT_STACK}`;
+          } catch (fontError) {
+            console.warn("Font setting failed, using fallback:", fontError);
+            ctx.font = `${fontSize}px sans-serif`;
+          }
 
           // 日本語テキストを描画
           ctx.fillStyle = "black";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
 
-          const lineHeight = uniformFontSize * 1.4;
+          const lineHeight = fontSize * 1.4;
           const totalHeight = lines.length * lineHeight;
           const startY =
-            bounds.y + bounds.height / 2 - totalHeight / 2 + uniformFontSize / 2;
+            bounds.y +
+            bounds.height / 2 -
+            totalHeight / 2 +
+            fontSize / 2;
 
           for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
             const line = lines[lineIndex];
