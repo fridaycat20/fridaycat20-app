@@ -1,8 +1,22 @@
 # Use Node.js base image with security updates
 FROM node:24-alpine
 
-# Install system dependencies including fonts
+# Install system dependencies including Canvas dependencies and fonts
 RUN apk update && apk add --no-cache \
+    # Canvas dependencies
+    python3 \
+    make \
+    g++ \
+    cairo-dev \
+    jpeg-dev \
+    pango-dev \
+    musl-dev \
+    giflib-dev \
+    pixman-dev \
+    pangomm-dev \
+    libjpeg-turbo-dev \
+    freetype-dev \
+    # Font dependencies
     fontconfig \
     ttf-dejavu \
     wget \

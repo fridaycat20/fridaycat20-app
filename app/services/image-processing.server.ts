@@ -157,7 +157,7 @@ export class ImageProcessingService {
       }
 
       // 行数をチェック（行間を考慮）
-      const lineHeight = fontSize * 1.1; // 行間を狭める
+      const lineHeight = fontSize * 1.4; // 日本語テキストに適した行間
       const totalHeight = lines.length * lineHeight;
 
       if (totalHeight <= bounds.height * 0.85) {
@@ -356,10 +356,10 @@ export class ImageProcessingService {
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
 
-          const lineHeight = uniformFontSize * 1.1;
+          const lineHeight = uniformFontSize * 1.4;
           const totalHeight = lines.length * lineHeight;
           const startY =
-            bounds.y + bounds.height / 2 - totalHeight / 2 + lineHeight / 2;
+            bounds.y + bounds.height / 2 - totalHeight / 2 + uniformFontSize / 2;
 
           for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
             const line = lines[lineIndex];
