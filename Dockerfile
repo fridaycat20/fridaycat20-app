@@ -1,13 +1,18 @@
-# Use Node.js base image
-FROM node:24-slim
+# Use Node.js base image with security updates
+FROM node:24-alpine
 
 # Install system dependencies including fonts
-RUN apt-get update && apt-get install -y \
-    fonts-noto-cjk \
+RUN apk update && apk add --no-cache \
     fontconfig \
+    ttf-dejavu \
+    wget \
+    unzip \
+    && wget -O /tmp/noto-cjk.zip https://github.com/googlefonts/noto-cjk/releases/download/Sans2.004/04_NotoSansCJK-OTF.zip \
+    && mkdir -p /usr/share/fonts/opentype/noto \
+    && unzip /tmp/noto-cjk.zip -d /usr/share/fonts/opentype/noto/ \
     && fc-cache -fv \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm /tmp/noto-cjk.zip \
+    && apk del wget unzip
 
 # Set working directory
 WORKDIR /app
