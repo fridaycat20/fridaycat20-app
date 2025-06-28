@@ -1,4 +1,5 @@
 import vision, { type protos } from "@google-cloud/vision";
+import { GoogleGenAI } from "@google/genai";
 
 export interface TextDetection {
   description: string;
@@ -20,12 +21,133 @@ type Vertex = protos.google.cloud.vision.v1.IVertex;
 
 export class VisionService {
   private client: InstanceType<typeof vision.ImageAnnotatorClient>;
+  private ai: GoogleGenAI;
 
   constructor() {
     this.client = new vision.ImageAnnotatorClient();
+    this.ai = new GoogleGenAI({
+      vertexai: true,
+      location: "us-central1",
+      project: "fridaycat20",
+    });
   }
 
-  // 近接するテキスト領域を結合する
+  // Geminiを使ってテキストの意味的なまとまりを判断してグルーピング
+  private async combineTextWithGemini(
+    textAnnotations: TextDetection[],
+  ): Promise<TextDetection[]> {
+    if (textAnnotations.length <= 1) return textAnnotations;
+
+    try {
+      // テキスト要素の情報を整理
+      const textElements = textAnnotations.map((annotation, index) => {
+        const bounds = this.getBoundingRect(annotation.boundingPoly.vertices);
+        return {
+          id: index,
+          text: annotation.description,
+          x: bounds.centerX,
+          y: bounds.centerY,
+          width: bounds.width,
+          height: bounds.height,
+        };
+      });
+
+      const prompt = `以下は4コマ漫画から抽出されたテキスト要素です。各要素は吹き出しや文字列の一部である可能性があります。
+
+テキスト要素:
+${textElements.map((el) => `ID${el.id}: "${el.text}" (座標: x=${Math.round(el.x)}, y=${Math.round(el.y)}, サイズ: ${Math.round(el.width)}x${Math.round(el.height)})`).join("\n")}
+
+以下の条件を満たすテキスト要素のみをグループ化してください：
+
+1. 座標がほぼ隣接している（距離がテキストサイズの0.5倍以内、ほとんど重なっているか隣り合っている）
+2. 意味的に連続している（分割された単語、同じセリフの続き）
+3. 同じ吹き出し内にある可能性が高い
+
+重要：少しでも離れた位置にあるテキストは別々のグループにしてください。基本的にはほとんどのテキストは単独のグループになると考えてください。
+
+グループ化結果を以下の形式で回答してください：
+グループ1: [ID0, ID1]
+グループ2: [ID2]
+グループ3: [ID3, ID4, ID5]
+
+各テキスト要素は必ず1つのグループに含めてください。`;
+
+      const response = await this.ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompt }],
+          },
+        ],
+        config: {
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
+        },
+      });
+
+      const result = response.text?.toString().trim() || "";
+      const groups = this.parseGeminiGroupingResult(result, textAnnotations);
+
+      return groups;
+    } catch (error) {
+      console.error("Gemini text grouping error:", error);
+      // フォールバックとして既存の近接ベースの結合を使用
+      return this.combineNearbyTextRegions(textAnnotations);
+    }
+  }
+
+  // Geminiの結果を解析してテキストをグループ化
+  private parseGeminiGroupingResult(
+    geminiResult: string,
+    originalAnnotations: TextDetection[],
+  ): TextDetection[] {
+    const groups: TextDetection[] = [];
+    const used = new Set<number>();
+
+    // "グループN: [IDx, IDy, ...]" の形式を解析
+    const groupPattern = /グループ\d+:\s*\[([^\]]+)\]/g;
+    let match: RegExpExecArray | null = groupPattern.exec(geminiResult);
+
+    while (match !== null) {
+      const idsText = match[1];
+      const ids = idsText
+        .split(",")
+        .map((id) => {
+          const idMatch = id.trim().match(/ID(\d+)/);
+          return idMatch ? Number.parseInt(idMatch[1]) : -1;
+        })
+        .filter((id) => id >= 0 && id < originalAnnotations.length);
+
+      if (ids.length > 0) {
+        const groupAnnotations = ids.map((id) => originalAnnotations[id]);
+
+        if (groupAnnotations.length === 1) {
+          groups.push(groupAnnotations[0]);
+        } else {
+          groups.push(this.mergeTextRegions(groupAnnotations));
+        }
+
+        for (const id of ids) {
+          used.add(id);
+        }
+      }
+      
+      match = groupPattern.exec(geminiResult);
+    }
+
+    // 使用されていないアノテーションを個別に追加
+    for (let i = 0; i < originalAnnotations.length; i++) {
+      if (!used.has(i)) {
+        groups.push(originalAnnotations[i]);
+      }
+    }
+
+    return groups;
+  }
+
+  // 近接するテキスト領域を結合する（フォールバック用）
   private combineNearbyTextRegions(
     textAnnotations: TextDetection[],
   ): TextDetection[] {
@@ -134,7 +256,8 @@ export class VisionService {
 
     const mergedText = sortedRegions
       .map((region) => region.description)
-      .join(" ");
+      .join(" ")
+      .replace(/^["「『]|["」』]$/g, ""); // 開始と終了の鉤括弧を除去
 
     // 全体を囲む境界ボックスを計算
     const allVertices = regions.flatMap(
@@ -216,9 +339,9 @@ export class VisionService {
         }
       }
 
-      // 近接するテキスト領域を結合
+      // Geminiを使ってテキストの意味的なまとまりで結合
       const combinedTextAnnotations =
-        this.combineNearbyTextRegions(textAnnotations);
+        await this.combineTextWithGemini(textAnnotations);
 
       return {
         fullText,

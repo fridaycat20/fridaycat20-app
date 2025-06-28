@@ -12,8 +12,8 @@ export const action = async ({ request }: { request: Request }) => {
   const minutes = formData.get("minutes");
   const audioFile = formData.get("audioFile");
 
-  let text = minutes ? minutes.toString().trim() : "";
   const hasAudio = !!audioFile;
+  let meetingMinutes = minutes ? minutes.toString().trim() : "";
 
   // セッションからユーザーを取得・検証
   const user = await getVerifiedUser(request);
@@ -64,7 +64,7 @@ export const action = async ({ request }: { request: Request }) => {
 
               // Speech-to-Text APIで音声認識を実行
               const [response] = await client.recognize(speechRequest);
-              text = response?.results
+              meetingMinutes = response?.results
                 ? response.results
                     .map((result) => result.alternatives?.[0].transcript)
                     .join(" ")
@@ -82,22 +82,26 @@ export const action = async ({ request }: { request: Request }) => {
           // テキスト生成のステップ
           sendEvent(EventType.STATUS, ProcessingStatus.SUMMARIZING_CONTENT);
           const response = await ai.models.generateContent({
-            model: "gemini-2.0-flash-001",
+            model: "gemini-2.5-flash",
             contents: [
               {
                 role: "user",
-                parts: [{ text: text }],
+                parts: [{ text: meetingMinutes }],
               },
             ],
             config: {
               systemInstruction:
                 'You are an expert 4-panel comic story writer. Create a 4-panel comic story from the input content with proper structure (introduction, development, climax, conclusion). Include specific dialogue in English, character actions, and scene descriptions for each panel. All dialogue must be in English and each speech bubble must contain no more than 30 words. Keep dialogue concise and impactful. Format your output as: Panel 1: [scene description] Character: "English dialogue", Panel 2: [scene description] Character: "English dialogue", Panel 3: [scene description] Character: "English dialogue", Panel 4: [scene description] Character: "English dialogue". Make it engaging and visual for comic illustration.',
+              thinkingConfig: {
+                thinkingBudget: 0,
+              },
             },
           });
 
           // 画像生成のステップ - 4つの候補を生成
           sendEvent(EventType.STATUS, ProcessingStatus.GENERATING_COMIC);
-          const imagePrompt = `Create exactly 4 panels arranged in a 2x2 grid layout for a 4-panel comic strip. Must have exactly 4 distinct panels with clear black borders separating each panel. Each panel should contain large rectangular white speech bubbles with black borders and sharp corners, with plenty of white space around the text for easy replacement. Each speech bubble should be rectangular or square-shaped with oversized margins around the text content. Avoid rounded or oval speech bubbles - use only rectangular shapes with straight edges and 90-degree corners. IMPORTANT: All text must appear ONLY inside speech bubbles. Do not add any text outside speech bubbles, no titles, no captions, no sound effects, no onomatopoeia, no panel numbers, no narrative text. Only dialogue text inside rectangular speech bubbles is allowed. The 4-panel comic should be based on: ${response.text?.toString() ?? ""}. Style: Clean manga/comic style with bold outlines, clear panel divisions in a 2x2 grid format, and spacious well-defined rectangular white speech bubbles with generous internal padding and sharp corners. Layout must be exactly 4 panels: top-left, top-right, bottom-left, bottom-right.`;
+          const generatedStory = response.text?.toString() ?? "";
+          const imagePrompt = `Create exactly 4 panels arranged in a 2x2 grid layout for a 4-panel comic strip. Must have exactly 4 distinct panels with clear black borders separating each panel. Each panel should contain large rectangular white speech bubbles with black borders and sharp corners, with plenty of white space around the text for easy replacement. Each speech bubble should be rectangular or square-shaped with oversized margins around the text content. Avoid rounded or oval speech bubbles - use only rectangular shapes with straight edges and 90-degree corners. IMPORTANT: All text must appear ONLY inside speech bubbles. Do not add any text outside speech bubbles, no titles, no captions, no sound effects, no onomatopoeia, no panel numbers, no narrative text. Only dialogue text inside rectangular speech bubbles is allowed. The 4-panel comic should be based on: ${generatedStory}. Style: Clean manga/comic style with bold outlines, clear panel divisions in a 2x2 grid format, and spacious well-defined rectangular white speech bubbles with generous internal padding and sharp corners. Layout must be exactly 4 panels: top-left, top-right, bottom-left, bottom-right.`;
 
           const response2 = await ai.models.generateImages({
             model: "imagen-4.0-generate-preview-06-06",
@@ -133,7 +137,7 @@ export const action = async ({ request }: { request: Request }) => {
                       role: "user",
                       parts: [
                         {
-                          text: `以下は4コマ漫画として生成された画像の候補です。元のストーリー「${response.text?.toString() ?? ""}」に最も適合し、以下の条件を満たす画像を1つ選んでください：
+                          text: `以下は4コマ漫画として生成された画像の候補です。元のストーリー「${generatedStory}」に最も適合し、以下の条件を満たす画像を1つ選んでください：
 
 1. 4つのパネルが明確に配置されている（2x2グリッド）
 2. 各パネルに適切な吹き出しがある
@@ -151,6 +155,11 @@ export const action = async ({ request }: { request: Request }) => {
                       ],
                     },
                   ],
+                  config: {
+                    thinkingConfig: {
+                      thinkingBudget: 0,
+                    },
+                  },
                 });
 
                 const evaluationResult =
@@ -200,11 +209,11 @@ export const action = async ({ request }: { request: Request }) => {
 
                 // 英文を日本語に翻訳
                 sendEvent(EventType.STATUS, ProcessingStatus.TRANSLATING_TEXT);
-                const originalTexts = ocrResult.textAnnotations.map(
+                const englishTexts = ocrResult.textAnnotations.map(
                   (annotation) => annotation.description,
                 );
                 const translationResult =
-                  await translationService.translateTexts(originalTexts);
+                  await translationService.translateTexts(englishTexts, meetingMinutes);
 
                 // 翻訳されたテキストを画像に描画（結合後のOCR結果を使用）
                 sendEvent(EventType.STATUS, ProcessingStatus.DRAWING_TEXT);
@@ -229,7 +238,7 @@ export const action = async ({ request }: { request: Request }) => {
               savedComic = await saveComicToStorage(
                 userId,
                 imageBytes,
-                response.text?.toString() || "",
+                generatedStory,
               );
             } catch (error) {
               console.error("画像保存エラー:", error);
@@ -240,7 +249,7 @@ export const action = async ({ request }: { request: Request }) => {
           // 完了
           const completeData = {
             imageBytes: selectedImageBytes,
-            generatedText: response.text,
+            generatedText: generatedStory,
             savedComic,
             ocrResult,
             maskedImageBytes,

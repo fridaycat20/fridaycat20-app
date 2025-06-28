@@ -16,7 +16,7 @@ export class TranslationService {
     });
   }
 
-  async translateTexts(texts: string[]): Promise<TranslationResult> {
+  async translateTexts(texts: string[], originalStory?: string): Promise<TranslationResult> {
     try {
       if (texts.length === 0) {
         return {
@@ -32,13 +32,16 @@ export class TranslationService {
       console.log("Combined text for translation:", combinedText);
 
       const response = await this.ai.models.generateContent({
-        model: "gemini-2.0-flash-001",
+        model: "gemini-2.5-flash",
         contents: [
           {
             role: "user",
             parts: [
               {
-                text: `以下の英文を日本語に翻訳してください。漫画のセリフとして自然な日本語にしてください。番号付きで出力してください。
+                text: `${originalStory ? `元のストーリー内容：
+${originalStory}
+
+上記のストーリーから生成された4コマ漫画の` : ''}以下の英文を日本語に翻訳してください。${originalStory ? 'ストーリーの文脈を考慮して、' : ''}漫画のセリフとして自然な日本語にしてください。番号付きで出力してください。
 
 ${combinedText}
 
@@ -52,7 +55,10 @@ ${combinedText}
         ],
         config: {
           systemInstruction:
-            "あなたは優秀な翻訳者です。英文を自然な日本語に翻訳することが得意です。漫画のセリフとして違和感のない、読みやすい日本語に翻訳してください。",
+            "あなたは優秀な翻訳者です。英文を自然な日本語に翻訳することが得意です。漫画のセリフとして違和感のない、読みやすい日本語に翻訳してください。文脈が提供された場合は、その内容を考慮してより適切な翻訳を行ってください。",
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
         },
       });
 
