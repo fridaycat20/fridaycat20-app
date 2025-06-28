@@ -120,12 +120,12 @@ export const action = async ({ request }: { request: Request }) => {
 
               // テキスト領域が検出された場合の処理
               if (ocrResult && ocrResult.textAnnotations.length > 0) {
-                // 白塗り画像を生成
+                // 白塗り画像を生成（元のOCR結果を使用）
                 sendEvent(EventType.STATUS, ProcessingStatus.MASKING_TEXT);
                 const maskResult =
                   await imageProcessingService.whiteMaskTextRegions(
                     imageBytes,
-                    ocrResult,
+                    ocrResult.originalTextAnnotations,
                   );
                 maskedImageBytes = maskResult.maskedImageBytes;
 
@@ -137,12 +137,12 @@ export const action = async ({ request }: { request: Request }) => {
                 const translationResult =
                   await translationService.translateTexts(originalTexts);
 
-                // 翻訳されたテキストを画像に描画
+                // 翻訳されたテキストを画像に描画（結合後のOCR結果を使用）
                 sendEvent(EventType.STATUS, ProcessingStatus.DRAWING_TEXT);
                 const translatedResult =
                   await imageProcessingService.translateTextRegions(
-                    imageBytes,
-                    ocrResult,
+                    maskedImageBytes,
+                    ocrResult.textAnnotations,
                     translationResult.translatedTexts,
                   );
                 translatedImageBytes = translatedResult.translatedImageBytes;
