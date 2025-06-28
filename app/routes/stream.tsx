@@ -140,7 +140,7 @@ export const action = async ({ request }: { request: Request }) => {
 3. ストーリーの流れに沿った構成になっている
 4. 漫画として読みやすいレイアウト
 
-各画像の評価理由を詳細に説明した後、最後に「選択: 番号」の形式で最も良い画像の番号（1-${images.length}）を回答してください。`,
+最も良い画像の番号（1-${images.length}）のみを数字で回答してください。`,
                         },
                         ...images.map((imageBytes) => ({
                           inlineData: {
@@ -154,13 +154,10 @@ export const action = async ({ request }: { request: Request }) => {
                 });
 
                 const evaluationResult =
-                  evaluationResponse.text?.toString().trim() || "選択: 1";
+                  evaluationResponse.text?.toString().trim() || "1";
 
-                // "選択: 番号" の形式から番号を抽出
-                const selectionMatch = evaluationResult.match(/選択:\s*(\d+)/);
-                const selectedNumber = selectionMatch
-                  ? Number.parseInt(selectionMatch[1])
-                  : 1;
+                // 数字のみの回答から番号を抽出
+                const selectedNumber = Number.parseInt(evaluationResult) || 1;
 
                 const selectedIndex = selectedNumber - 1;
                 const finalIndex = Math.max(
