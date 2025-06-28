@@ -4,9 +4,14 @@ import { useFetcher, useLoaderData } from "react-router";
 import { Logo } from "~/components/Logo";
 import { getVerifiedUser } from "~/lib/session-utils.server";
 import { sessionStorage } from "~/lib/session.server";
+import {
+  ErrorMessage,
+  EventType,
+  type LoadingStatus,
+  ProcessingStatus,
+} from "~/types/streaming";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { FileUploader } from "../components/FileUploader";
-import { EventType, type LoadingStatus, ErrorMessage, ProcessingStatus } from "~/types/streaming";
 
 // タブの種類を定義
 type InputTab = "text" | "audio";
@@ -25,14 +30,14 @@ export const meta: MetaFunction = () => {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const user = await getVerifiedUser(request);
-  
+
   // セッションが期限切れの場合はログインページにリダイレクト
   if (!user) {
     const session = await sessionStorage.getSession(
       request.headers.get("Cookie"),
     );
     const storedUser = session.get("user");
-    
+
     // セッションにユーザーがいたが検証に失敗した場合（期限切れ）
     if (storedUser) {
       throw new Response(null, {
@@ -44,7 +49,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       });
     }
   }
-  
+
   return { user };
 };
 
@@ -90,6 +95,19 @@ export default function Index() {
       setAudioFile(file);
     }
   };
+
+  // サンプルテキスト読み込み関数
+  const loadSampleText = useCallback(async (filename: string) => {
+    try {
+      const response = await fetch(`/${filename}`);
+      const text = await response.text();
+      if (textareaRef.current) {
+        textareaRef.current.value = text;
+      }
+    } catch (error) {
+      console.error("Failed to load sample text:", error);
+    }
+  }, []);
 
   // 画像URLの生成
   const imageUrl = useMemo(() => {
@@ -356,6 +374,41 @@ export default function Index() {
                 <FileUploader onTextLoaded={handleTextLoaded} />
               </div>
 
+              {/* サンプル議事録ボタン */}
+              <div className="mb-4">
+                <p className="block font-bold mb-2">サンプル議事録</p>
+                <div className="flex flex-wrap gap-2 mb-4">
+                  <button
+                    type="button"
+                    onClick={() => loadSampleText("sample1.txt")}
+                    className="px-4 py-2 text-sm font-medium text-white bg-gray-800 hover:bg-gray-700 rounded-md transition-colors"
+                  >
+                    商品企画会議
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadSampleText("sample2.txt")}
+                    className="px-4 py-2 text-sm font-medium text-white bg-gray-800 hover:bg-gray-700 rounded-md transition-colors"
+                  >
+                    システム開発会議
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadSampleText("sample3.txt")}
+                    className="px-4 py-2 text-sm font-medium text-white bg-gray-800 hover:bg-gray-700 rounded-md transition-colors"
+                  >
+                    マーケティング会議
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadSampleText("sample4.txt")}
+                    className="px-4 py-2 text-sm font-medium text-white bg-gray-800 hover:bg-gray-700 rounded-md transition-colors"
+                  >
+                    人事制度会議
+                  </button>
+                </div>
+              </div>
+
               <label htmlFor="minutes" className="block font-bold mb-2">
                 議事録を入力
               </label>
@@ -423,7 +476,10 @@ export default function Index() {
                 {/* 進捗インジケーター */}
                 <div className="mt-3 flex justify-center space-x-2">
                   {Object.values(ProcessingStatus).map((status, index) => {
-                    const isActive = Object.values(ProcessingStatus).indexOf(loadingStatus as ProcessingStatus) >= index;
+                    const isActive =
+                      Object.values(ProcessingStatus).indexOf(
+                        loadingStatus as ProcessingStatus,
+                      ) >= index;
                     return (
                       <div
                         key={status}
