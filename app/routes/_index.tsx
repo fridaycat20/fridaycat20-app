@@ -404,7 +404,7 @@ export default function Index() {
         </form>
 
         {/* 画像表示エリア */}
-        <div className="min-h-[320px] border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center bg-gray-50 gap-4">
+        <div className="min-h-[576px] border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center bg-gray-50 gap-4">
           {isStreaming ? (
             <div className="flex flex-col items-center justify-center space-y-4">
               {/* ローディングスピナー */}
@@ -495,7 +495,7 @@ export default function Index() {
                       ? "テキストマスク画像"
                       : "翻訳版画像"
                 }
-                className="max-h-80 object-contain"
+                className="max-h-[576px] object-contain"
               />
 
               {/* ボタン群 */}
