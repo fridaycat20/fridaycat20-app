@@ -95,18 +95,90 @@ export const action = async ({ request }: { request: Request }) => {
             },
           });
 
-          // 画像生成のステップ
+          // 画像生成のステップ - 4つの候補を生成
           sendEvent(EventType.STATUS, ProcessingStatus.GENERATING_COMIC);
+          const imagePrompt = `Create exactly 4 panels arranged in a 2x2 grid layout for a 4-panel comic strip. Must have exactly 4 distinct panels with clear black borders separating each panel. Each panel should contain large rectangular white speech bubbles with black borders and sharp corners, with plenty of white space around the text for easy replacement. Each speech bubble should be rectangular or square-shaped with oversized margins around the text content. Avoid rounded or oval speech bubbles - use only rectangular shapes with straight edges and 90-degree corners. IMPORTANT: All text must appear ONLY inside speech bubbles. Do not add any text outside speech bubbles, no titles, no captions, no sound effects, no onomatopoeia, no panel numbers, no narrative text. Only dialogue text inside rectangular speech bubbles is allowed. The 4-panel comic should be based on: ${response.text?.toString() ?? ""}. Style: Clean manga/comic style with bold outlines, clear panel divisions in a 2x2 grid format, and spacious well-defined rectangular white speech bubbles with generous internal padding and sharp corners. Layout must be exactly 4 panels: top-left, top-right, bottom-left, bottom-right.`;
+
           const response2 = await ai.models.generateImages({
-            model: "imagen-4.0-ultra-generate-preview-06-06",
-            prompt: `Create exactly 4 panels arranged in a 2x2 grid layout for a 4-panel comic strip. Must have exactly 4 distinct panels with clear black borders separating each panel. Each panel should contain large rectangular white speech bubbles with black borders and sharp corners, with plenty of white space around the text for easy replacement. Each speech bubble should be rectangular or square-shaped with oversized margins around the text content. Avoid rounded or oval speech bubbles - use only rectangular shapes with straight edges and 90-degree corners. IMPORTANT: All text must appear ONLY inside speech bubbles. Do not add any text outside speech bubbles, no titles, no captions, no sound effects, no onomatopoeia, no panel numbers, no narrative text. Only dialogue text inside rectangular speech bubbles is allowed. The 4-panel comic should be based on: ${response.text?.toString() ?? ""}. Style: Clean manga/comic style with bold outlines, clear panel divisions in a 2x2 grid format, and spacious well-defined rectangular white speech bubbles with generous internal padding and sharp corners. Layout must be exactly 4 panels: top-left, top-right, bottom-left, bottom-right.`,
+            model: "imagen-4.0-generate-preview-06-06",
+            // model: "imagen-4.0-ultra-generate-preview-06-06",
+            prompt: imagePrompt,
             config: {
-              numberOfImages: 1,
+              numberOfImages: 4,
             },
           });
 
-          // 画像があればBase64エンコードされたデータを返す
-          const imageBytes = response2?.generatedImages?.[0]?.image?.imageBytes;
+          // 4つの画像から最適なものを選択
+          sendEvent(EventType.STATUS, ProcessingStatus.SELECTING_BEST_IMAGE);
+          let selectedImageBytes: string | null = null;
+
+          if (
+            response2?.generatedImages &&
+            response2.generatedImages.length > 0
+          ) {
+            const images = response2.generatedImages
+              .map((img) => img.image?.imageBytes)
+              .filter((bytes): bytes is string => !!bytes);
+
+            if (images.length === 1) {
+              // 1つしかない場合はそれを使用
+              selectedImageBytes = images[0];
+            } else if (images.length > 1) {
+              // 複数ある場合はGemini 2.5 Flashで最適なものを選択
+              try {
+                const evaluationResponse = await ai.models.generateContent({
+                  model: "gemini-2.5-flash",
+                  contents: [
+                    {
+                      role: "user",
+                      parts: [
+                        {
+                          text: `以下は4コマ漫画として生成された画像の候補です。元のストーリー「${response.text?.toString() ?? ""}」に最も適合し、以下の条件を満たす画像を1つ選んでください：
+
+1. 4つのパネルが明確に配置されている（2x2グリッド）
+2. 各パネルに適切な吹き出しがある
+3. ストーリーの流れに沿った構成になっている
+4. 漫画として読みやすいレイアウト
+
+各画像の評価理由を詳細に説明した後、最後に「選択: 番号」の形式で最も良い画像の番号（1-${images.length}）を回答してください。`,
+                        },
+                        ...images.map((imageBytes) => ({
+                          inlineData: {
+                            mimeType: "image/png",
+                            data: imageBytes,
+                          },
+                        })),
+                      ],
+                    },
+                  ],
+                });
+
+                const evaluationResult =
+                  evaluationResponse.text?.toString().trim() || "選択: 1";
+
+                // "選択: 番号" の形式から番号を抽出
+                const selectionMatch = evaluationResult.match(/選択:\s*(\d+)/);
+                const selectedNumber = selectionMatch
+                  ? Number.parseInt(selectionMatch[1])
+                  : 1;
+
+                const selectedIndex = selectedNumber - 1;
+                const finalIndex = Math.max(
+                  0,
+                  Math.min(selectedIndex, images.length - 1),
+                );
+
+                selectedImageBytes = images[finalIndex];
+              } catch (evaluationError) {
+                console.error("画像評価エラー:", evaluationError);
+                // 評価に失敗した場合は最初の画像を使用
+                selectedImageBytes = images[0];
+              }
+            }
+          }
+
+          // 選択された画像を使用
+          const imageBytes = selectedImageBytes;
 
           // OCR処理を実行
           let ocrResult = null;
@@ -170,7 +242,7 @@ export const action = async ({ request }: { request: Request }) => {
 
           // 完了
           const completeData = {
-            imageBytes: response2?.generatedImages?.[0]?.image?.imageBytes,
+            imageBytes: selectedImageBytes,
             generatedText: response.text,
             savedComic,
             ocrResult,

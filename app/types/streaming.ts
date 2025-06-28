@@ -2,6 +2,7 @@ export enum ProcessingStatus {
   RECOGNIZING_SPEECH = "音声を認識中...",
   SUMMARIZING_CONTENT = "内容を要約中...",
   GENERATING_COMIC = "4コマ漫画を生成中...",
+  SELECTING_BEST_IMAGE = "最適な画像を選択中...",
   ANALYZING_IMAGE = "生成された画像を解析中...",
   MASKING_TEXT = "テキスト領域を白塗り中...",
   TRANSLATING_TEXT = "テキストを日本語に翻訳中...",
