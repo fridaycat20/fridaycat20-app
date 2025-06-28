@@ -20,6 +20,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function Gallery() {
   const { user, comics: initialComics } = useLoaderData<typeof loader>();
   const [comics] = useState<ComicMetadata[]>(initialComics);
+  const [expandedStories, setExpandedStories] = useState<Set<string>>(new Set());
+
+  const toggleStoryExpansion = (comicId: string) => {
+    setExpandedStories(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(comicId)) {
+        newSet.delete(comicId);
+      } else {
+        newSet.add(comicId);
+      }
+      return newSet;
+    });
+  };
 
   return (
     <div className="max-w-5xl mx-auto p-8">
@@ -76,8 +89,27 @@ export default function Gallery() {
                     })}
                   </div>
                   {comic.prompt && (
-                    <div className="text-sm text-gray-700 mb-3 line-clamp-3">
-                      {comic.prompt}
+                    <div className="mb-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-sm font-medium text-blue-800">
+                          📖 生成されたストーリー
+                        </h4>
+                        {comic.prompt.length > 100 && (
+                          <button
+                            type="button"
+                            onClick={() => toggleStoryExpansion(comic.id)}
+                            className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                          >
+                            {expandedStories.has(comic.id) ? "折りたたむ" : "全文表示"}
+                          </button>
+                        )}
+                      </div>
+                      <div className="text-sm text-gray-700 leading-relaxed bg-blue-50 p-3 rounded border border-blue-100">
+                        {expandedStories.has(comic.id) 
+                          ? comic.prompt
+                          : `${comic.prompt.slice(0, 100)}${comic.prompt.length > 100 ? "..." : ""}`
+                        }
+                      </div>
                     </div>
                   )}
                   <div className="flex gap-2">

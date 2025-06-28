@@ -188,7 +188,6 @@ export const action = async ({ request }: { request: Request }) => {
 
           // OCR処理を実行
           let ocrResult = null;
-          let maskedImageBytes = null;
           let translatedImageBytes = null;
           if (imageBytes) {
             try {
@@ -205,7 +204,7 @@ export const action = async ({ request }: { request: Request }) => {
                     imageBytes,
                     ocrResult.originalTextAnnotations,
                   );
-                maskedImageBytes = maskResult.maskedImageBytes;
+                const maskedImageBytes = maskResult.maskedImageBytes;
 
                 // 英文を日本語に翻訳
                 sendEvent(EventType.STATUS, ProcessingStatus.TRANSLATING_TEXT);
@@ -231,13 +230,14 @@ export const action = async ({ request }: { request: Request }) => {
             }
           }
 
-          // ログインユーザーの場合は画像を自動保存
+          // ログインユーザーの場合は画像を自動保存（翻訳版があれば翻訳版を保存）
           let savedComic = null;
           if (userId && imageBytes) {
             try {
+              const imageToSave = translatedImageBytes || imageBytes;
               savedComic = await saveComicToStorage(
                 userId,
-                imageBytes,
+                imageToSave,
                 generatedStory,
               );
             } catch (error) {
@@ -252,7 +252,6 @@ export const action = async ({ request }: { request: Request }) => {
             generatedText: generatedStory,
             savedComic,
             ocrResult,
-            maskedImageBytes,
             translatedImageBytes,
           };
 
