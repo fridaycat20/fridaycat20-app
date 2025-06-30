@@ -1,6 +1,6 @@
 import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
 } from "firebase/auth";
 import { Authenticator } from "remix-auth";
 import { FormStrategy } from "remix-auth-form";
@@ -17,13 +17,17 @@ export const authenticator = new Authenticator<User>();
 
 // Form Strategy for login
 authenticator.use(
-  new FormStrategy(async ({ form }) => {
+  new FormStrategy(async ({ form, request }) => {
     const email = form.get("email");
     const password = form.get("password");
     const action = form.get("_action");
 
     if (typeof email !== "string" || typeof password !== "string") {
-      throw new Error("Invalid form data");
+      throw new Error("メールアドレスとパスワードが必要です");
+    }
+
+    if (!email || !password) {
+      throw new Error("メールアドレスとパスワードを入力してください");
     }
 
     try {
@@ -58,9 +62,22 @@ authenticator.use(
       return user;
     } catch (error: unknown) {
       if (error instanceof Error) {
+        // Firebase specific error handling
+        if (error.message.includes("email-already-in-use")) {
+          throw new Error("このメールアドレスは既に使用されています");
+        }
+        if (error.message.includes("weak-password")) {
+          throw new Error("パスワードは6文字以上で入力してください");
+        }
+        if (error.message.includes("invalid-email")) {
+          throw new Error("有効なメールアドレスを入力してください");
+        }
+        if (error.message.includes("user-not-found") || error.message.includes("wrong-password")) {
+          throw new Error("メールアドレスまたはパスワードが間違っています");
+        }
         throw new Error(error.message);
       }
-      throw new Error("Authentication failed");
+      throw new Error("認証に失敗しました");
     }
   }),
   "user-pass",

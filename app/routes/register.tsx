@@ -1,8 +1,8 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
+import { RegisterForm } from "~/components/Auth/RegisterForm";
 import { authenticator } from "~/lib/auth.server";
 import { sessionStorage } from "~/lib/session.server";
-import { RegisterForm } from "~/components/Auth/RegisterForm";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Check if user is already authenticated
@@ -17,11 +17,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const formData = await request.formData();
-  formData.set("_action", "register");
-
   try {
-    const user = await authenticator.authenticate("user-pass", request);
+    // まず元のリクエストからフォームデータを取得
+    const originalFormData = await request.formData();
+    const email = originalFormData.get("email");
+    const password = originalFormData.get("password");
+
+    // 新しいFormDataを作成して必要なフィールドを設定
+    const formData = new FormData();
+    formData.set("email", email as string);
+    formData.set("password", password as string);
+    formData.set("_action", "register");
+
+    // 新しいリクエストを作成
+    const newRequest = new Request(request.url, {
+      method: "POST",
+      body: formData,
+    });
+
+    const user = await authenticator.authenticate("user-pass", newRequest);
 
     // Create session
     const session = await sessionStorage.getSession(
@@ -40,6 +54,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       throw error; // Re-throw redirect responses
     }
     console.error("Registration error:", error);
+
+    // エラーメッセージをより具体的に
+    if (error instanceof Error) {
+      return { error: error.message };
+    }
     return { error: "新規登録に失敗しました" };
   }
 };

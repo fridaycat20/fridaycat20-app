@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { LoaderFunctionArgs, MetaFunction } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { Logo } from "~/components/Logo";
@@ -526,19 +526,38 @@ export default function Index() {
                   </div>
                 </div>
               ) : (
-                <img
-                  src={
-                    activeImageTab === "translated" && translatedImageUrl
-                      ? translatedImageUrl
-                      : imageUrl
-                  }
-                  alt={
-                    activeImageTab === "translated" && translatedImageUrl
-                      ? "日本語版4コマ漫画"
-                      : "4コマ漫画"
-                  }
-                  className="max-h-[576px] object-contain"
-                />
+                <div className="relative inline-block">
+                  <img
+                    src={
+                      activeImageTab === "translated" && translatedImageUrl
+                        ? translatedImageUrl
+                        : imageUrl
+                    }
+                    alt={
+                      activeImageTab === "translated" && translatedImageUrl
+                        ? "日本語版4コマ漫画"
+                        : "4コマ漫画"
+                    }
+                    className="max-h-[576px] object-contain"
+                  />
+                  {/* 4コマ漫画の読む順番の番号 - 各コマの左上に配置 */}
+                  {/* 1コマ目: 左上 */}
+                  <div className="absolute top-4 left-4 w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg border-2 border-white">
+                    1
+                  </div>
+                  {/* 2コマ目: 右上 */}
+                  <div className="absolute top-4 right-4 w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg border-2 border-white">
+                    2
+                  </div>
+                  {/* 3コマ目: 左下 */}
+                  <div className="absolute top-72 left-4 w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg border-2 border-white">
+                    3
+                  </div>
+                  {/* 4コマ目: 右下 */}
+                  <div className="absolute top-72 right-4 w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg border-2 border-white">
+                    4
+                  </div>
+                </div>
               )}
 
               {/* ボタン群 */}
